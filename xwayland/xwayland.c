@@ -81,7 +81,7 @@ struct wlr_xwayland *wlr_xwayland_create(struct wl_display *wl_display,
 	xwayland->wl_display = wl_display;
 	xwayland->compositor = compositor;
 
-	wlr_xwayland->scale = 1;
+	xwayland->scale = 1;
 
 	wl_signal_init(&wlr_xwayland->events.new_surface);
 	wl_signal_init(&wlr_xwayland->events.ready);
