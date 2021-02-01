@@ -83,8 +83,8 @@ struct wlr_xwayland *wlr_xwayland_create(struct wl_display *wl_display,
 
 	xwayland->scale = 1;
 
-	wl_signal_init(&wlr_xwayland->events.new_surface);
-	wl_signal_init(&wlr_xwayland->events.ready);
+	wl_signal_init(&xwayland->events.new_surface);
+	wl_signal_init(&xwayland->events.ready);
 
 	struct wlr_xwayland_server_options options = {
 		.lazy = lazy,
