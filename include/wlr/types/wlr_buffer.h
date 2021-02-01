@@ -69,6 +69,10 @@ void wlr_buffer_unlock(struct wlr_buffer *buffer);
 /**
  * Reads the DMA-BUF attributes of the buffer. If this buffer isn't a DMA-BUF,
  * returns false.
+ *
+ * The returned DMA-BUF attributes are valid for the lifetime of the
+ * wlr_buffer. The caller isn't responsible for cleaning up the DMA-BUF
+ * attributes.
  */
 bool wlr_buffer_get_dmabuf(struct wlr_buffer *buffer,
 	struct wlr_dmabuf_attributes *attribs);
@@ -99,6 +103,11 @@ struct wlr_client_buffer {
 
 struct wlr_renderer;
 
+/**
+ * Get a client buffer from a generic buffer. If the buffer isn't a client
+ * buffer, returns NULL.
+ */
+struct wlr_client_buffer *wlr_client_buffer_get(struct wlr_buffer *buffer);
 /**
  * Check if a resource is a wl_buffer resource.
  */

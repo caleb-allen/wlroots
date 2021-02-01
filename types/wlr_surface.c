@@ -11,6 +11,7 @@
 #include <wlr/util/log.h>
 #include <wlr/util/region.h>
 #include "util/signal.h"
+#include "util/time.h"
 
 #define CALLBACK_VERSION 1
 #define SURFACE_VERSION 4
@@ -138,6 +139,35 @@ static void surface_set_input_region(struct wl_client *client,
 	}
 }
 
+/**
+ * Computes the surface viewport source size, ie. the size after applying the
+ * surface's scale, transform and cropping (via the viewport's source
+ * rectangle) but before applying the viewport scaling (via the viewport's
+ * destination rectangle).
+ */
+static void surface_state_viewport_src_size(struct wlr_surface_state *state,
+		int *out_width, int *out_height) {
+	if (state->buffer_width == 0 && state->buffer_height == 0) {
+		*out_width = *out_height = 0;
+		return;
+	}
+
+	if (state->viewport.has_src) {
+		*out_width = state->viewport.src.width;
+		*out_height = state->viewport.src.height;
+	} else {
+		int width = state->buffer_width / state->scale;
+		int height = state->buffer_height / state->scale;
+		if ((state->transform & WL_OUTPUT_TRANSFORM_90) != 0) {
+			int tmp = width;
+			width = height;
+			height = tmp;
+		}
+		*out_width = width;
+		*out_height = height;
+	}
+}
+
 static void surface_state_finalize(struct wlr_surface *surface,
 		struct wlr_surface_state *state) {
 	if ((state->committed & WLR_SURFACE_STATE_BUFFER)) {
@@ -149,15 +179,17 @@ static void surface_state_finalize(struct wlr_surface *surface,
 		}
 	}
 
-	int width = state->buffer_width / state->scale;
-	int height = state->buffer_height / state->scale;
-	if ((state->transform & WL_OUTPUT_TRANSFORM_90) != 0) {
-		int tmp = width;
-		width = height;
-		height = tmp;
+	if (state->viewport.has_dst) {
+		if (state->buffer_width == 0 && state->buffer_height == 0) {
+			state->width = state->height = 0;
+		} else {
+			state->width = state->viewport.dst_width;
+			state->height = state->viewport.dst_height;
+		}
+	} else {
+		surface_state_viewport_src_size(state,
+			&state->width, &state->height);
 	}
-	state->width = width;
-	state->height = height;
 
 	pixman_region32_intersect_rect(&state->surface_damage,
 		&state->surface_damage, 0, 0, state->width, state->height);
@@ -182,6 +214,22 @@ static void surface_update_damage(pixman_region32_t *buffer_damage,
 		pixman_region32_init(&surface_damage);
 
 		pixman_region32_copy(&surface_damage, &pending->surface_damage);
+
+		if (pending->viewport.has_dst) {
+			int src_width, src_height;
+			surface_state_viewport_src_size(pending, &src_width, &src_height);
+			float scale_x = (float)pending->viewport.dst_width / src_width;
+			float scale_y = (float)pending->viewport.dst_height / src_height;
+			wlr_region_scale_xy(&surface_damage, &surface_damage,
+				1.0 / scale_x, 1.0 / scale_y);
+		}
+		if (pending->viewport.has_src) {
+			// This is lossy: do a best-effort conversion
+			pixman_region32_translate(&surface_damage,
+				floor(pending->viewport.src.x),
+				floor(pending->viewport.src.y));
+		}
+
 		wlr_region_transform(&surface_damage, &surface_damage,
 			wlr_output_transform_invert(pending->transform),
 			pending->width, pending->height);
@@ -228,6 +276,9 @@ static void surface_state_copy(struct wlr_surface_state *state,
 	}
 	if (next->committed & WLR_SURFACE_STATE_INPUT_REGION) {
 		pixman_region32_copy(&state->input, &next->input);
+	}
+	if (next->committed & WLR_SURFACE_STATE_VIEWPORT) {
+		memcpy(&state->viewport, &next->viewport, sizeof(state->viewport));
 	}
 
 	state->committed |= next->committed;
@@ -565,8 +616,15 @@ static void subsurface_destroy(struct wlr_subsurface *subsurface) {
 	free(subsurface);
 }
 
+static void surface_output_destroy(struct wlr_surface_output *surface_output);
+
 static void surface_handle_resource_destroy(struct wl_resource *resource) {
+	struct wlr_surface_output *surface_output, *tmp;
 	struct wlr_surface *surface = wlr_surface_from_resource(resource);
+
+	wl_list_for_each_safe(surface_output, tmp, &surface->current_outputs, link) {
+		surface_output_destroy(surface_output);
+	}
 
 	wlr_signal_emit_safe(&surface->events.destroy, surface);
 
@@ -625,6 +683,7 @@ struct wlr_surface *wlr_surface_create(struct wl_client *client,
 	wl_signal_init(&surface->events.new_subsurface);
 	wl_list_init(&surface->subsurfaces);
 	wl_list_init(&surface->subsurface_pending_list);
+	wl_list_init(&surface->current_outputs);
 	pixman_region32_init(&surface->buffer_damage);
 	pixman_region32_init(&surface->opaque_region);
 	pixman_region32_init(&surface->input_region);
@@ -661,7 +720,7 @@ bool wlr_surface_set_role(struct wlr_surface *surface,
 	if (surface->role != NULL && surface->role != role) {
 		if (error_resource != NULL) {
 			wl_resource_post_error(error_resource, error_code,
-				"Cannot assign role %s to wl_surface@%d, already has role %s\n",
+				"Cannot assign role %s to wl_surface@%" PRIu32 ", already has role %s\n",
 				role->name, wl_resource_get_id(surface->resource),
 				surface->role->name);
 		}
@@ -669,7 +728,7 @@ bool wlr_surface_set_role(struct wlr_surface *surface,
 	}
 	if (surface->role_data != NULL && surface->role_data != role_data) {
 		wl_resource_post_error(error_resource, error_code,
-			"Cannot reassign role %s to wl_surface@%d,"
+			"Cannot reassign role %s to wl_surface@%" PRIu32 ","
 			"role object still exists", role->name,
 			wl_resource_get_id(surface->resource));
 		return false;
@@ -740,7 +799,7 @@ static void subsurface_handle_place_above(struct wl_client *client,
 	if (!sibling) {
 		wl_resource_post_error(subsurface->resource,
 			WL_SUBSURFACE_ERROR_BAD_SURFACE,
-			"%s: wl_surface@%d is not a parent or sibling",
+			"%s: wl_surface@%" PRIu32 "is not a parent or sibling",
 			"place_above", wl_resource_get_id(sibling_surface->resource));
 		return;
 	}
@@ -767,7 +826,7 @@ static void subsurface_handle_place_below(struct wl_client *client,
 	if (!sibling) {
 		wl_resource_post_error(subsurface->resource,
 			WL_SUBSURFACE_ERROR_BAD_SURFACE,
-			"%s: wl_surface@%d is not a parent or sibling",
+			"%s: wl_surface@%" PRIu32 " is not a parent or sibling",
 			"place_below", wl_resource_get_id(sibling_surface->resource));
 		return;
 	}
@@ -1002,6 +1061,9 @@ struct wlr_surface *wlr_surface_get_root_surface(struct wlr_surface *surface) {
 		if (subsurface == NULL) {
 			break;
 		}
+		if (subsurface->parent == NULL) {
+			return NULL;
+		}
 		surface = subsurface->parent;
 	}
 	return surface;
@@ -1040,10 +1102,59 @@ struct wlr_surface *wlr_surface_surface_at(struct wlr_surface *surface,
 	return NULL;
 }
 
+static void surface_output_destroy(struct wlr_surface_output *surface_output) {
+	wl_list_remove(&surface_output->bind.link);
+	wl_list_remove(&surface_output->destroy.link);
+	wl_list_remove(&surface_output->link);
+
+	free(surface_output);
+}
+
+static void surface_handle_output_bind(struct wl_listener *listener,
+		void *data) {
+	struct wlr_output_event_bind *evt = data;
+	struct wlr_surface_output *surface_output =
+		wl_container_of(listener, surface_output, bind);
+	struct wl_client *client = wl_resource_get_client(
+			surface_output->surface->resource);
+	if (client == wl_resource_get_client(evt->resource)) {
+		wl_surface_send_enter(surface_output->surface->resource, evt->resource);
+	}
+}
+
+static void surface_handle_output_destroy(struct wl_listener *listener,
+		void *data) {
+	struct wlr_surface_output *surface_output =
+		wl_container_of(listener, surface_output, destroy);
+	surface_output_destroy(surface_output);
+}
+
 void wlr_surface_send_enter(struct wlr_surface *surface,
 		struct wlr_output *output) {
 	struct wl_client *client = wl_resource_get_client(surface->resource);
+	struct wlr_surface_output *surface_output;
 	struct wl_resource *resource;
+
+	wl_list_for_each(surface_output, &surface->current_outputs, link) {
+		if (surface_output->output == output) {
+			return;
+		}
+	}
+
+	surface_output = calloc(1, sizeof(struct wlr_surface_output));
+	if (surface_output == NULL) {
+		return;
+	}
+	surface_output->bind.notify = surface_handle_output_bind;
+	surface_output->destroy.notify = surface_handle_output_destroy;
+
+	wl_signal_add(&output->events.bind, &surface_output->bind);
+	wl_signal_add(&output->events.destroy, &surface_output->destroy);
+
+	surface_output->surface = surface;
+	surface_output->output = output;
+	wl_list_insert(&surface->current_outputs, &surface_output->link);
+
 	wl_resource_for_each(resource, &output->resources) {
 		if (client == wl_resource_get_client(resource)) {
 			wl_surface_send_enter(surface->resource, resource);
@@ -1054,16 +1165,21 @@ void wlr_surface_send_enter(struct wlr_surface *surface,
 void wlr_surface_send_leave(struct wlr_surface *surface,
 		struct wlr_output *output) {
 	struct wl_client *client = wl_resource_get_client(surface->resource);
+	struct wlr_surface_output *surface_output, *tmp;
 	struct wl_resource *resource;
-	wl_resource_for_each(resource, &output->resources) {
-		if (client == wl_resource_get_client(resource)) {
-			wl_surface_send_leave(surface->resource, resource);
+
+	wl_list_for_each_safe(surface_output, tmp,
+			&surface->current_outputs, link) {
+		if (surface_output->output == output) {
+			surface_output_destroy(surface_output);
+			wl_resource_for_each(resource, &output->resources) {
+				if (client == wl_resource_get_client(resource)) {
+					wl_surface_send_leave(surface->resource, resource);
+				}
+			}
+			break;
 		}
 	}
-}
-
-static inline int64_t timespec_to_msec(const struct timespec *a) {
-	return (int64_t)a->tv_sec * 1000 + a->tv_nsec / 1000000;
 }
 
 void wlr_surface_send_frame_done(struct wlr_surface *surface,
@@ -1128,6 +1244,13 @@ void wlr_surface_get_extends(struct wlr_surface *surface, struct wlr_box *box) {
 	box->height = acc.max_y - acc.min_y;
 }
 
+static void crop_region(pixman_region32_t *dst, pixman_region32_t *src,
+		const struct wlr_box *box) {
+	pixman_region32_intersect_rect(dst, src,
+		box->x, box->y, box->width, box->height);
+	pixman_region32_translate(dst, -box->x, -box->y);
+}
+
 void wlr_surface_get_effective_damage(struct wlr_surface *surface,
 		pixman_region32_t *damage) {
 	pixman_region32_clear(damage);
@@ -1137,6 +1260,24 @@ void wlr_surface_get_effective_damage(struct wlr_surface *surface,
 		surface->current.transform, surface->current.buffer_width,
 		surface->current.buffer_height);
 	wlr_region_scale(damage, damage, 1.0 / (float)surface->current.scale);
+
+	if (surface->current.viewport.has_src) {
+		struct wlr_box src_box = {
+			.x = floor(surface->current.viewport.src.x),
+			.y = floor(surface->current.viewport.src.y),
+			.width = ceil(surface->current.viewport.src.width),
+			.height = ceil(surface->current.viewport.src.height),
+		};
+		crop_region(damage, damage, &src_box);
+	}
+	if (surface->current.viewport.has_dst) {
+		int src_width, src_height;
+		surface_state_viewport_src_size(&surface->current,
+			&src_width, &src_height);
+		float scale_x = (float)surface->current.viewport.dst_width / src_width;
+		float scale_y = (float)surface->current.viewport.dst_height / src_height;
+		wlr_region_scale_xy(damage, damage, scale_x, scale_y);
+	}
 
 	// On resize, damage the previous bounds of the surface. The current bounds
 	// have already been damaged in surface_update_damage.
@@ -1157,5 +1298,28 @@ void wlr_surface_get_effective_damage(struct wlr_surface *surface,
 		}
 		pixman_region32_union_rect(damage, damage, prev_x, prev_y,
 			surface->previous.width, surface->previous.height);
+	}
+}
+
+void wlr_surface_get_buffer_source_box(struct wlr_surface *surface,
+		struct wlr_fbox *box) {
+	box->x = box->y = 0;
+	box->width = surface->current.buffer_width;
+	box->height = surface->current.buffer_height;
+
+	if (surface->current.viewport.has_src) {
+		box->x = surface->current.viewport.src.x * surface->current.scale;
+		box->y = surface->current.viewport.src.y * surface->current.scale;
+		box->width = surface->current.viewport.src.width * surface->current.scale;
+		box->height = surface->current.viewport.src.height * surface->current.scale;
+		if ((surface->current.transform & WL_OUTPUT_TRANSFORM_90) != 0) {
+			double tmp = box->x;
+			box->x = box->y;
+			box->y = tmp;
+
+			tmp = box->width;
+			box->width = box->height;
+			box->height = tmp;
+		}
 	}
 }

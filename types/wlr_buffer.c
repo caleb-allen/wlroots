@@ -96,10 +96,18 @@ bool wlr_resource_get_buffer_size(struct wl_resource *resource,
 
 static const struct wlr_buffer_impl client_buffer_impl;
 
+struct wlr_client_buffer *wlr_client_buffer_get(struct wlr_buffer *buffer) {
+	if (buffer->impl != &client_buffer_impl) {
+		return NULL;
+	}
+	return (struct wlr_client_buffer *)buffer;
+}
+
 static struct wlr_client_buffer *client_buffer_from_buffer(
 		struct wlr_buffer *buffer) {
-	assert(buffer->impl == &client_buffer_impl);
-	return (struct wlr_client_buffer *) buffer;
+	struct wlr_client_buffer *client_buffer = wlr_client_buffer_get(buffer);
+	assert(client_buffer != NULL);
+	return client_buffer;
 }
 
 static void client_buffer_destroy(struct wlr_buffer *_buffer) {
@@ -214,9 +222,6 @@ struct wlr_client_buffer *wlr_client_buffer_import(
 		return NULL;
 	}
 
-	int width, height;
-	wlr_resource_get_buffer_size(resource, renderer, &width, &height);
-
 	struct wlr_client_buffer *buffer =
 		calloc(1, sizeof(struct wlr_client_buffer));
 	if (buffer == NULL) {
@@ -224,7 +229,8 @@ struct wlr_client_buffer *wlr_client_buffer_import(
 		wl_resource_post_no_memory(resource);
 		return NULL;
 	}
-	wlr_buffer_init(&buffer->base, &client_buffer_impl, width, height);
+	wlr_buffer_init(&buffer->base, &client_buffer_impl,
+		texture->width, texture->height);
 	buffer->resource = resource;
 	buffer->texture = texture;
 	buffer->resource_released = resource_released;
@@ -271,9 +277,8 @@ struct wlr_client_buffer *wlr_client_buffer_apply_damage(
 	int32_t width = wl_shm_buffer_get_width(shm_buf);
 	int32_t height = wl_shm_buffer_get_height(shm_buf);
 
-	int32_t texture_width, texture_height;
-	wlr_texture_get_size(buffer->texture, &texture_width, &texture_height);
-	if (width != texture_width || height != texture_height) {
+	if ((uint32_t)width != buffer->texture->width ||
+			(uint32_t)height != buffer->texture->height) {
 		return NULL;
 	}
 

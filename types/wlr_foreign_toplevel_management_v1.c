@@ -9,7 +9,7 @@
 #include "util/signal.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-protocol.h"
 
-#define FOREIGN_TOPLEVEL_MANAGEMENT_V1_VERSION 2
+#define FOREIGN_TOPLEVEL_MANAGEMENT_V1_VERSION 3
 
 static const struct zwlr_foreign_toplevel_handle_v1_interface toplevel_handle_impl;
 
@@ -107,8 +107,11 @@ static void foreign_toplevel_handle_activate(struct wl_client *client,
 	if (!toplevel) {
 		return;
 	}
-
 	struct wlr_seat_client *seat_client = wlr_seat_client_from_resource(seat);
+	if (!seat_client) {
+		return;
+	}
+
 	struct wlr_foreign_toplevel_handle_v1_activated_event event = {
 		.toplevel = toplevel,
 		.seat = seat_client->seat,
@@ -195,6 +198,10 @@ void wlr_foreign_toplevel_handle_v1_set_title(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, const char *title) {
 	free(toplevel->title);
 	toplevel->title = strdup(title);
+	if (toplevel->title == NULL) {
+		wlr_log(WLR_ERROR, "failed to allocate memory for toplevel title");
+		return;
+	}
 
 	struct wl_resource *resource;
 	wl_resource_for_each(resource, &toplevel->resources) {
@@ -208,6 +215,10 @@ void wlr_foreign_toplevel_handle_v1_set_app_id(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, const char *app_id) {
 	free(toplevel->app_id);
 	toplevel->app_id = strdup(app_id);
+	if (toplevel->app_id == NULL) {
+		wlr_log(WLR_ERROR, "failed to allocate memory for toplevel app_id");
+		return;
+	}
 
 	struct wl_resource *resource;
 	wl_resource_for_each(resource, &toplevel->resources) {
@@ -367,6 +378,10 @@ static void toplevel_send_state(struct wlr_foreign_toplevel_handle_v1 *toplevel)
 
 void wlr_foreign_toplevel_handle_v1_set_maximized(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, bool maximized) {
+	if (maximized == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED)) {
+		return;
+	}
 	if (maximized) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED;
 	} else {
@@ -377,6 +392,10 @@ void wlr_foreign_toplevel_handle_v1_set_maximized(
 
 void wlr_foreign_toplevel_handle_v1_set_minimized(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, bool minimized) {
+	if (minimized == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED)) {
+		return;
+	}
 	if (minimized) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED;
 	} else {
@@ -387,6 +406,10 @@ void wlr_foreign_toplevel_handle_v1_set_minimized(
 
 void wlr_foreign_toplevel_handle_v1_set_activated(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, bool activated) {
+	if (activated == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED)) {
+		return;
+	}
 	if (activated) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED;
 	} else {
@@ -397,12 +420,51 @@ void wlr_foreign_toplevel_handle_v1_set_activated(
 
 void wlr_foreign_toplevel_handle_v1_set_fullscreen(
 		struct wlr_foreign_toplevel_handle_v1 * toplevel, bool fullscreen) {
+	if (fullscreen == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN)) {
+		return;
+	}
 	if (fullscreen) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN;
 	} else {
 		toplevel->state &= ~WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN;
 	}
 	toplevel_send_state(toplevel);
+}
+
+static void toplevel_resource_send_parent(
+		struct wl_resource *toplevel_resource,
+		struct wlr_foreign_toplevel_handle_v1 *parent) {
+	if (wl_resource_get_version(toplevel_resource) <
+			ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_PARENT_SINCE_VERSION) {
+		return;
+	}
+	struct wl_client *client = wl_resource_get_client(toplevel_resource);
+	struct wl_resource *parent_resource = NULL;
+	if (parent) {
+		parent_resource = wl_resource_find_for_client(&parent->resources, client);
+		if (!parent_resource) {
+			/* don't send an event if this client destroyed the parent handle */
+			return;
+		}
+	}
+	zwlr_foreign_toplevel_handle_v1_send_parent(toplevel_resource,
+		parent_resource);
+}
+
+void wlr_foreign_toplevel_handle_v1_set_parent(
+		struct wlr_foreign_toplevel_handle_v1 *toplevel,
+		struct wlr_foreign_toplevel_handle_v1 *parent) {
+	if (parent == toplevel->parent) {
+		/* only send parent event to the clients if there was a change */
+		return;
+	}
+	struct wl_resource *toplevel_resource, *tmp;
+	wl_resource_for_each_safe(toplevel_resource, tmp, &toplevel->resources) {
+		toplevel_resource_send_parent(toplevel_resource, parent);
+	}
+	toplevel->parent = parent;
+	toplevel_update_idle_source(toplevel);
 }
 
 void wlr_foreign_toplevel_handle_v1_destroy(
@@ -431,6 +493,19 @@ void wlr_foreign_toplevel_handle_v1_destroy(
 	}
 
 	wl_list_remove(&toplevel->link);
+
+	/* need to ensure no other toplevels hold a pointer to this one as
+	 * a parent, so that a later call to foreign_toplevel_manager_bind()
+	 * will not result in a segfault */
+	struct wlr_foreign_toplevel_handle_v1 *tl, *tmp3;
+	wl_list_for_each_safe(tl, tmp3, &toplevel->manager->toplevels, link) {
+		if (tl->parent == toplevel) {
+			/* Note: we send a parent signal to all clients in this case;
+			 * the caller should first destroy the child handles if it
+			 * wishes to avoid this behavior. */
+			wlr_foreign_toplevel_handle_v1_set_parent(tl, NULL);
+		}
+	}
 
 	free(toplevel->title);
 	free(toplevel->app_id);
@@ -542,6 +617,8 @@ static void toplevel_send_details_to_toplevel_resource(
 	zwlr_foreign_toplevel_handle_v1_send_state(resource, &states);
 	wl_array_release(&states);
 
+	toplevel_resource_send_parent(resource, toplevel->parent);
+
 	zwlr_foreign_toplevel_handle_v1_send_done(resource);
 }
 
@@ -560,9 +637,17 @@ static void foreign_toplevel_manager_bind(struct wl_client *client, void *data,
 	wl_list_insert(&manager->resources, wl_resource_get_link(resource));
 
 	struct wlr_foreign_toplevel_handle_v1 *toplevel, *tmp;
+	/* First loop: create a handle for all toplevels for all clients.
+	 * Separation into two loops avoid the case where a child handle
+	 * is created before a parent handle, so the parent relationship
+	 * could not be sent to a client. */
+	wl_list_for_each_safe(toplevel, tmp, &manager->toplevels, link) {
+		create_toplevel_resource_for_resource(toplevel, resource);
+	}
+	/* Second loop: send details about each toplevel. */
 	wl_list_for_each_safe(toplevel, tmp, &manager->toplevels, link) {
 		struct wl_resource *toplevel_resource =
-			create_toplevel_resource_for_resource(toplevel, resource);
+			wl_resource_find_for_client(&toplevel->resources, client);
 		toplevel_send_details_to_toplevel_resource(toplevel,
 			toplevel_resource);
 	}

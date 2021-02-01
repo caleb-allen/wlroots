@@ -10,7 +10,6 @@
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_fullscreen_shell_v1.h>
-#include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_matrix.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output.h>
@@ -204,12 +203,11 @@ int main(int argc, char *argv[]) {
 
 	struct fullscreen_server server = {0};
 	server.wl_display = wl_display_create();
-	server.backend = wlr_backend_autocreate(server.wl_display, NULL);
+	server.backend = wlr_backend_autocreate(server.wl_display);
 	server.renderer = wlr_backend_get_renderer(server.backend);
 	wlr_renderer_init_wl_display(server.renderer, server.wl_display);
 
 	wlr_compositor_create(server.wl_display, server.renderer);
-	wlr_linux_dmabuf_v1_create(server.wl_display, server.renderer);
 
 	server.output_layout = wlr_output_layout_create();
 

@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <wayland-server-core.h>
+#include <wlr/types/wlr_box.h>
 #include <wlr/types/wlr_output.h>
 
 enum wlr_surface_state_field {
@@ -25,6 +26,7 @@ enum wlr_surface_state_field {
 	WLR_SURFACE_STATE_TRANSFORM = 1 << 5,
 	WLR_SURFACE_STATE_SCALE = 1 << 6,
 	WLR_SURFACE_STATE_FRAME_CALLBACK_LIST = 1 << 7,
+	WLR_SURFACE_STATE_VIEWPORT = 1 << 8,
 };
 
 struct wlr_surface_state {
@@ -41,6 +43,21 @@ struct wlr_surface_state {
 	int width, height; // in surface-local coordinates
 	int buffer_width, buffer_height;
 
+	/**
+	 * The viewport is applied after the surface transform and scale.
+	 *
+	 * If has_src is true, the surface content is cropped to the provided
+	 * rectangle. If has_dst is true, the surface content is scaled to the
+	 * provided rectangle.
+	 */
+	struct {
+		bool has_src, has_dst;
+		// In coordinates after scale/transform are applied, but before the
+		// destination rectangle is applied
+		struct wlr_fbox src;
+		int dst_width, dst_height; // in surface-local coordinates
+	} viewport;
+
 	struct wl_listener buffer_destroy;
 };
 
@@ -48,6 +65,15 @@ struct wlr_surface_role {
 	const char *name;
 	void (*commit)(struct wlr_surface *surface);
 	void (*precommit)(struct wlr_surface *surface);
+};
+
+struct wlr_surface_output {
+	struct wlr_surface *surface;
+	struct wlr_output *output;
+
+	struct wl_list link; // wlr_surface::current_outputs
+	struct wl_listener bind;
+	struct wl_listener destroy;
 };
 
 struct wlr_surface {
@@ -108,6 +134,8 @@ struct wlr_surface {
 
 	// wlr_subsurface::parent_pending_link
 	struct wl_list subsurface_pending_list;
+
+	struct wl_list current_outputs; // wlr_surface_output::link
 
 	struct wl_listener renderer_destroy;
 
@@ -192,7 +220,8 @@ struct wlr_subsurface *wlr_subsurface_create(struct wlr_surface *surface,
 		struct wl_list *resource_list);
 
 /**
- * Get the root of the subsurface tree for this surface.
+ * Get the root of the subsurface tree for this surface. Can return NULL if
+ * a surface in the tree has been destroyed.
  */
 struct wlr_surface *wlr_surface_get_root_surface(struct wlr_surface *surface);
 
@@ -220,7 +249,6 @@ void wlr_surface_send_leave(struct wlr_surface *surface,
 void wlr_surface_send_frame_done(struct wlr_surface *surface,
 		const struct timespec *when);
 
-struct wlr_box;
 /**
  * Get the bounding box that contains the surface and all subsurfaces in
  * surface coordinates.
@@ -228,6 +256,11 @@ struct wlr_box;
  */
 void wlr_surface_get_extends(struct wlr_surface *surface, struct wlr_box *box);
 
+/**
+ * Get the wlr_surface corresponding to a wl_surface resource. This asserts
+ * that the resource is a valid wl_surface resource created by wlroots and
+ * will never return NULL.
+ */
 struct wlr_surface *wlr_surface_from_resource(struct wl_resource *resource);
 
 /**
@@ -245,5 +278,16 @@ void wlr_surface_for_each_surface(struct wlr_surface *surface,
  */
 void wlr_surface_get_effective_damage(struct wlr_surface *surface,
 	pixman_region32_t *damage);
+
+/**
+ * Get the source rectangle describing the region of the buffer that needs to
+ * be sampled to render this surface's current state. The box is in
+ * buffer-local coordinates.
+ *
+ * If the viewport's source rectangle is unset, the position is zero and the
+ * size is the buffer's.
+ */
+void wlr_surface_get_buffer_source_box(struct wlr_surface *surface,
+	struct wlr_fbox *box);
 
 #endif

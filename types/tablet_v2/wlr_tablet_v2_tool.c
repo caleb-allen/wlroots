@@ -4,6 +4,7 @@
 
 #include "tablet-unstable-v2-protocol.h"
 #include "util/array.h"
+#include "util/time.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <types/wlr_tablet_v2.h>
@@ -73,12 +74,12 @@ static enum zwp_tablet_tool_v2_type tablet_type_from_wlr_type(
 		return ZWP_TABLET_TOOL_V2_TYPE_MOUSE;
 	case WLR_TABLET_TOOL_TYPE_LENS:
 		return ZWP_TABLET_TOOL_V2_TYPE_LENS;
-	default:
-		/* We skip these devices earlier on */
-		assert(false && "Unreachable");
+	case WLR_TABLET_TOOL_TYPE_TOTEM:
+		// missing, see:
+		// https://gitlab.freedesktop.org/wayland/wayland-protocols/-/issues/19
+		abort();
 	}
-
-	assert(false && "Unreachable");
+	abort(); // unreachable
 }
 
 void destroy_tablet_tool_v2(struct wl_resource *resource) {
@@ -301,16 +302,10 @@ static ssize_t tablet_tool_button_update(struct wlr_tablet_v2_tablet_tool *tool,
 	return i;
 }
 
-static inline int64_t timespec_to_msec(const struct timespec *a) {
-	return (int64_t)a->tv_sec * 1000 + a->tv_nsec / 1000000;
-}
-
 static void send_tool_frame(void *data) {
 	struct wlr_tablet_tool_client_v2 *tool = data;
 
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	zwp_tablet_tool_v2_send_frame(tool->resource, timespec_to_msec(&now));
+	zwp_tablet_tool_v2_send_frame(tool->resource, get_current_time_msec());
 	tool->frame_source = NULL;
 }
 
@@ -792,18 +787,6 @@ static void implicit_tool_up(struct wlr_tablet_tool_v2_grab *grab) {
 	check_and_release_implicit_grab(grab);
 }
 
-/* Only send the motion event, when we are over the surface for now */
-static void implicit_tool_motion(
-	struct wlr_tablet_tool_v2_grab *grab, double x, double y) {
-	struct implicit_grab_state *state = grab->data;
-	if (state->focused != state->original) {
-		return;
-	}
-
-	wlr_send_tablet_v2_tablet_tool_motion(grab->tool, x, y);
-}
-
-
 static void implicit_tool_button(
 	struct wlr_tablet_tool_v2_grab *grab, uint32_t button,
 	enum zwp_tablet_pad_v2_button_state state) {
@@ -822,7 +805,7 @@ static const struct wlr_tablet_tool_v2_grab_interface
 	.proximity_in = implicit_tool_proximity_in,
 	.down = implicit_tool_down,
 	.up = implicit_tool_up,
-	.motion = implicit_tool_motion,
+	.motion = default_tool_motion,
 	.pressure = default_tool_pressure,
 	.distance = default_tool_distance,
 	.tilt = default_tool_tilt,
@@ -834,13 +817,14 @@ static const struct wlr_tablet_tool_v2_grab_interface
 	.cancel = implicit_tool_cancel,
 };
 
-static bool tool_has_implicit_grab(struct wlr_tablet_v2_tablet_tool *tool) {
+bool wlr_tablet_tool_v2_has_implicit_grab(
+		struct wlr_tablet_v2_tablet_tool *tool) {
 	return tool->grab->interface == &implicit_tool_grab_interface;
 }
 
 void wlr_tablet_tool_v2_start_implicit_grab(
 		struct wlr_tablet_v2_tablet_tool *tool) {
-	if (tool_has_implicit_grab(tool) || !tool->focused_surface) {
+	if (wlr_tablet_tool_v2_has_implicit_grab(tool) || !tool->focused_surface) {
 		return;
 	}
 

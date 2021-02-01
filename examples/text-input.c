@@ -7,6 +7,7 @@
 #include <wayland-client.h>
 #include <wayland-egl.h>
 #include <wlr/render/egl.h>
+#include "egl_common.h"
 #include "text-input-unstable-v3-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -63,12 +64,11 @@ static struct xdg_wm_base *wm_base = NULL;
 static struct zwp_text_input_manager_v3 *text_input_manager = NULL;
 static struct zwp_text_input_v3 *text_input	= NULL;
 
-struct wlr_egl egl;
 struct wl_egl_window *egl_window;
 struct wlr_egl_surface *egl_surface;
 
 static void draw(void) {
-	eglMakeCurrent(egl.display, egl_surface, egl_surface, egl.context);
+	eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
 
 	float color[] = {1.0, 1.0, 0.0, 1.0};
 	color[0] = enabled * 1.0;
@@ -78,7 +78,7 @@ static void draw(void) {
 	glClearColor(color[0], color[1], color[2], 1.0);
 	glClear(GL_COLOR_BUFFER_BIT);
 
-	eglSwapBuffers(egl.display, egl_surface);
+	eglSwapBuffers(egl_display, egl_surface);
 }
 
 static size_t utf8_strlen(char *str) {
@@ -344,7 +344,6 @@ int main(int argc, char **argv) {
 
 	struct wl_registry *registry = wl_display_get_registry(display);
 	wl_registry_add_listener(registry, &registry_listener, NULL);
-	wl_display_dispatch(display);
 	wl_display_roundtrip(display);
 
 	if (compositor == NULL) {
@@ -364,9 +363,7 @@ int main(int argc, char **argv) {
 
 	zwp_text_input_v3_add_listener(text_input, &text_input_listener, NULL);
 
-
-	wlr_egl_init(&egl, EGL_PLATFORM_WAYLAND_EXT, display, NULL,
-		WL_SHM_FORMAT_ARGB8888);
+	egl_init(display);
 
 	struct wl_surface *surface = wl_compositor_create_surface(compositor);
 	struct xdg_surface *xdg_surface =
@@ -379,7 +376,8 @@ int main(int argc, char **argv) {
 	wl_surface_commit(surface);
 
 	egl_window = wl_egl_window_create(surface, width, height);
-	egl_surface = wlr_egl_create_surface(&egl, egl_window);
+	egl_surface = eglCreatePlatformWindowSurfaceEXT(
+		egl_display, egl_config, egl_window, NULL);
 
 	wl_display_roundtrip(display);
 

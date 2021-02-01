@@ -1,4 +1,5 @@
 threads = dependency('threads')
+wayland_egl = dependency('wayland-egl')
 wayland_cursor = dependency('wayland-cursor')
 libpng = dependency('libpng', required: false, disabler: true)
 # These versions correspond to ffmpeg 4.0
@@ -53,32 +54,32 @@ clients = {
 		'proto': ['kde-idle'],
 	},
 	'idle-inhibit': {
-		'src': 'idle-inhibit.c',
-		'dep': wlroots,
+		'src': ['idle-inhibit.c', 'egl_common.c'],
+		'dep': [wayland_egl, wlroots],
 		'proto': [
 			'idle-inhibit-unstable-v1',
 			'xdg-shell',
 		],
 	},
 	'keyboard-shortcuts-inhibit': {
-		'src': 'keyboard-shortcuts-inhibit.c',
-		'dep': [wayland_cursor, wlroots],
+		'src': ['keyboard-shortcuts-inhibit.c', 'egl_common.c'],
+		'dep': [wayland_egl, wayland_cursor, wlroots],
 		'proto': [
 			'keyboard-shortcuts-inhibit-unstable-v1',
 			'xdg-shell',
 		],
 	},
 	'layer-shell': {
-		'src': 'layer-shell.c',
-		'dep': [wayland_cursor, wlroots],
+		'src': ['layer-shell.c', 'egl_common.c'],
+		'dep': [wayland_egl, wayland_cursor, wlroots],
 		'proto': [
 			'wlr-layer-shell-unstable-v1',
 			'xdg-shell',
 		],
 	},
 	'input-inhibitor': {
-		'src': 'input-inhibitor.c',
-		'dep': [wayland_cursor, wlroots],
+		'src': ['input-inhibitor.c', 'egl_common.c'],
+		'dep': [wayland_egl, wayland_cursor, wlroots],
 		'proto': [
 			'wlr-input-inhibitor-unstable-v1',
 			'xdg-shell',
@@ -95,16 +96,16 @@ clients = {
 		'proto': ['wlr-output-power-management-unstable-v1'],
 	},
 	'pointer-constraints': {
-		'src': 'pointer-constraints.c',
-		'dep': wlroots,
+		'src': ['pointer-constraints.c', 'egl_common.c'],
+		'dep': [wayland_egl, wlroots],
 		'proto': [
 			'pointer-constraints-unstable-v1',
 			'xdg-shell',
 		],
 	},
 	'relative-pointer': {
-		'src': 'relative-pointer-unstable-v1.c',
-		'dep': wlroots,
+		'src': ['relative-pointer-unstable-v1.c', 'egl_common.c'],
+		'dep': [wayland_egl, wlroots],
 		'proto': [
 			'pointer-constraints-unstable-v1',
 			'relative-pointer-unstable-v1',
@@ -127,9 +128,17 @@ clients = {
 		'dep': [libpng, rt],
 		'proto': ['wlr-screencopy-unstable-v1'],
 	},
+	'screencopy-dmabuf': {
+		'src': 'screencopy-dmabuf.c',
+		'dep': [libpng, rt, gbm, drm],
+		'proto': [
+			'wlr-screencopy-unstable-v1',
+			'linux-dmabuf-unstable-v1',
+		],
+	},
 	'toplevel-decoration': {
-		'src': 'toplevel-decoration.c',
-		'dep': wlroots,
+		'src': ['toplevel-decoration.c', 'egl_common.c'],
+		'dep': [wayland_egl, wlroots],
 		'proto': [
 			'xdg-decoration-unstable-v1',
 			'xdg-shell',
@@ -137,7 +146,7 @@ clients = {
 	},
 	'input-method': {
 		'src': 'input-method.c',
-		'dep': libepoll,
+		'dep': [wayland_egl, libepoll],
 		'proto': [
 			'input-method-unstable-v2',
 			'text-input-unstable-v3',
@@ -145,8 +154,8 @@ clients = {
 		],
 	},
 	'text-input': {
-		'src': 'text-input.c',
-		'dep': [wayland_cursor, wlroots],
+		'src': ['text-input.c', 'egl_common.c'],
+		'dep': [wayland_egl, wayland_cursor, wlroots],
 		'proto': [
 			'text-input-unstable-v3',
 			'xdg-shell',
@@ -161,6 +170,13 @@ clients = {
 		'src': 'virtual-pointer.c',
 		'dep': wlroots,
 		'proto': ['wlr-virtual-pointer-unstable-v1'],
+	},
+	'input-method-keyboard-grab': {
+		'src': 'input-method-keyboard-grab.c',
+		'dep': xkbcommon,
+		'proto': [
+			'input-method-unstable-v2',
+		],
 	},
 }
 

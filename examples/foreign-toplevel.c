@@ -7,28 +7,29 @@
 #include <wayland-client.h>
 #include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 
-#define WLR_FOREIGN_TOPLEVEL_MANAGEMENT_VERSION 2
+#define WLR_FOREIGN_TOPLEVEL_MANAGEMENT_VERSION 3
 
-/**
- * Usage:
- * 1. foreign-toplevel
- * 	  Prints a list of opened toplevels
- * 2. foreign-toplevel -f <id>
- *    Focus the toplevel with the given id
- * 3. foreign-toplevel -a <id>
- *    Maximize the toplevel with the given id
- * 4. foreign-toplevel -u <id>
- *    Unmaximize the toplevel with the given id
- * 5. foreign-toplevel -i <id>
- *    Minimize the toplevel with the given id
- * 6. foreign-toplevel -r <id>
- * 	  Restore(unminimize) the toplevel with the given id
- * 7. foreign-toplevel -c <id>
- *    Close the toplevel with the given id
- * 8. foreign-toplevel -m
- *    Continuously print changes to the list of opened toplevels.
- *    Can be used together with some of the previous options.
- */
+
+static void print_help(void) {
+	static const char usage[] =
+		"Usage: foreign-toplevel [OPTIONS] ...\n"
+		"Manage and view information about toplevel windows.\n"
+		"\n"
+		"  -f <id>         focus\n"
+		"  -s <id>         fullscreen\n"
+		"  -o <output_id>  select output for fullscreen toplevel to appear on. Use this\n"
+		"                  option with -s. View available outputs with wayland-info.\n"
+		"  -S <id>         unfullscreen\n"
+		"  -a <id>         maximize\n"
+		"  -u <id>         unmaximize\n"
+		"  -i <id>         minimize\n"
+		"  -r <id>         restore(unminimize)\n"
+		"  -c <id>         close\n"
+		"  -m              continuously print changes to the list of opened toplevels\n"
+		"                  Can be used together with some of the previous options.\n"
+		"  -h              print help message and quit\n";
+	fprintf(stderr, "%s", usage);
+}
 
 enum toplevel_state_field {
 	TOPLEVEL_STATE_MAXIMIZED = (1 << 0),
@@ -38,11 +39,16 @@ enum toplevel_state_field {
 	TOPLEVEL_STATE_INVALID = (1 << 4),
 };
 
+static const uint32_t no_parent = (uint32_t)-1;
+static struct wl_output *pref_output = NULL;
+static uint32_t pref_output_id = UINT32_MAX;
+
 struct toplevel_state {
 	char *title;
 	char *app_id;
 
 	uint32_t state;
+	uint32_t parent_id;
 };
 
 static void copy_state(struct toplevel_state *current,
@@ -67,6 +73,8 @@ static void copy_state(struct toplevel_state *current,
 		current->state = pending->state;
 	}
 
+	current->parent_id = pending->parent_id;
+
 	pending->state = TOPLEVEL_STATE_INVALID;
 }
 
@@ -83,6 +91,12 @@ static void print_toplevel(struct toplevel_v1 *toplevel, bool print_endl) {
 	printf("-> %d. title=%s app_id=%s", toplevel->id,
 			toplevel->current.title ?: "(nil)",
 			toplevel->current.app_id ?: "(nil)");
+
+	if (toplevel->current.parent_id != no_parent) {
+		printf(" parent=%u", toplevel->current.parent_id);
+	} else {
+		printf(" no parent");
+	}
 
 	if (print_endl) {
 		printf("\n");
@@ -172,6 +186,28 @@ static void toplevel_handle_state(void *data,
 	toplevel->pending.state = array_to_state(state);
 }
 
+static struct zwlr_foreign_toplevel_manager_v1 *toplevel_manager = NULL;
+static struct wl_list toplevel_list;
+
+static void toplevel_handle_parent(void *data,
+		struct zwlr_foreign_toplevel_handle_v1 *zwlr_toplevel,
+		struct zwlr_foreign_toplevel_handle_v1 *zwlr_parent) {
+	struct toplevel_v1 *toplevel = data;
+	toplevel->pending.parent_id = no_parent;
+	if (zwlr_parent) {
+		struct toplevel_v1 *toplevel_tmp;
+		wl_list_for_each(toplevel_tmp, &toplevel_list, link) {
+			if (toplevel_tmp->zwlr_toplevel == zwlr_parent) {
+				toplevel->pending.parent_id = toplevel_tmp->id;
+				break;
+			}
+		}
+		if (toplevel->pending.parent_id == no_parent) {
+			fprintf(stderr, "Cannot find parent toplevel!\n");
+		}
+	}
+}
+
 static void toplevel_handle_done(void *data,
 		struct zwlr_foreign_toplevel_handle_v1 *zwlr_toplevel) {
 	struct toplevel_v1 *toplevel = data;
@@ -202,10 +238,8 @@ static const struct zwlr_foreign_toplevel_handle_v1_listener toplevel_impl = {
 	.state = toplevel_handle_state,
 	.done = toplevel_handle_done,
 	.closed = toplevel_handle_closed,
+	.parent = toplevel_handle_parent
 };
-
-static struct zwlr_foreign_toplevel_manager_v1 *toplevel_manager = NULL;
-static struct wl_list toplevel_list;
 
 static void toplevel_manager_handle_toplevel(void *data,
 		struct zwlr_foreign_toplevel_manager_v1 *toplevel_manager,
@@ -218,6 +252,8 @@ static void toplevel_manager_handle_toplevel(void *data,
 
 	toplevel->id = global_id++;
 	toplevel->zwlr_toplevel = zwlr_toplevel;
+	toplevel->current.parent_id = no_parent;
+	toplevel->pending.parent_id = no_parent;
 	wl_list_insert(&toplevel_list, &toplevel->link);
 
 	zwlr_foreign_toplevel_handle_v1_add_listener(zwlr_toplevel, &toplevel_impl,
@@ -238,9 +274,11 @@ struct wl_seat *seat = NULL;
 static void handle_global(void *data, struct wl_registry *registry,
 		uint32_t name, const char *interface, uint32_t version) {
 	if (strcmp(interface, wl_output_interface.name) == 0) {
-		struct wl_output *output = wl_registry_bind(registry, name,
-				&wl_output_interface, version);
-		wl_output_set_user_data(output, (void*)(size_t)name); // assign some ID to the output
+		if (name == pref_output_id) {
+			pref_output = wl_registry_bind(registry, name,
+					&wl_output_interface, version);
+
+		}
 	} else if (strcmp(interface,
 			zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
 		toplevel_manager = wl_registry_bind(registry, name,
@@ -291,8 +329,7 @@ int main(int argc, char **argv) {
 	int one_shot = 1;
 	int c;
 
-	// TODO maybe print usage with -h?
-	while ((c = getopt(argc, argv, "f:a:u:i:r:c:s:S:m")) != -1) {
+	while ((c = getopt(argc, argv, "f:a:u:i:r:c:s:S:mo:h")) != -1) {
 		switch (c) {
 		case 'f':
 			focus_id = atoi(optarg);
@@ -321,6 +358,17 @@ int main(int argc, char **argv) {
 		case 'm':
 			one_shot = 0;
 			break;
+		case 'o':
+			pref_output_id = atoi(optarg);
+			break;
+		case '?':
+			print_help();
+			return EXIT_FAILURE;
+			break;
+		case 'h':
+			print_help();
+			return EXIT_SUCCESS;
+			break;
 		}
 	}
 
@@ -332,7 +380,6 @@ int main(int argc, char **argv) {
 
 	struct wl_registry *registry = wl_display_get_registry(display);
 	wl_registry_add_listener(registry, &registry_listener, NULL);
-	wl_display_dispatch(display);
 	wl_display_roundtrip(display);
 
 	if (toplevel_manager == NULL) {
@@ -359,7 +406,11 @@ int main(int argc, char **argv) {
 		zwlr_foreign_toplevel_handle_v1_unset_minimized(toplevel->zwlr_toplevel);
 	}
 	if ((toplevel = toplevel_by_id_or_bail(fullscreen_id))) {
-		zwlr_foreign_toplevel_handle_v1_set_fullscreen(toplevel->zwlr_toplevel, NULL);
+		if (pref_output_id != UINT32_MAX && pref_output == NULL) {
+			fprintf(stderr, "Could not find output %i\n", pref_output_id);
+		}
+
+		zwlr_foreign_toplevel_handle_v1_set_fullscreen(toplevel->zwlr_toplevel, pref_output);
 	}
 	if ((toplevel = toplevel_by_id_or_bail(unfullscreen_id))) {
 		zwlr_foreign_toplevel_handle_v1_unset_fullscreen(toplevel->zwlr_toplevel);

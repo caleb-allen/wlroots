@@ -11,11 +11,6 @@ wlr_files += files(
 	'tablet_v2/wlr_tablet_v2_tablet.c',
 	'tablet_v2/wlr_tablet_v2_tool.c',
 	'tablet_v2/wlr_tablet_v2.c',
-	'xdg_shell_v6/wlr_xdg_popup_v6.c',
-	'xdg_shell_v6/wlr_xdg_positioner_v6.c',
-	'xdg_shell_v6/wlr_xdg_shell_v6.c',
-	'xdg_shell_v6/wlr_xdg_surface_v6.c',
-	'xdg_shell_v6/wlr_xdg_toplevel_v6.c',
 	'xdg_shell/wlr_xdg_popup.c',
 	'xdg_shell/wlr_xdg_positioner.c',
 	'xdg_shell/wlr_xdg_shell.c',
@@ -64,9 +59,18 @@ wlr_files += files(
 	'wlr_tablet_tool.c',
 	'wlr_text_input_v3.c',
 	'wlr_touch.c',
+	'wlr_viewporter.c',
 	'wlr_virtual_keyboard_v1.c',
 	'wlr_virtual_pointer_v1.c',
 	'wlr_xcursor_manager.c',
 	'wlr_xdg_decoration_v1.c',
 	'wlr_xdg_output_v1.c',
 )
+
+if conf_data.get('WLR_HAS_XDG_FOREIGN', 0) == 1
+	wlr_files += files(
+		'wlr_xdg_foreign_v1.c',
+		'wlr_xdg_foreign_v2.c',
+		'wlr_xdg_foreign_registry.c',
+	)
+endif

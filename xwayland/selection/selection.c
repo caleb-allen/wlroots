@@ -5,25 +5,24 @@
 #include <string.h>
 #include <unistd.h>
 #include <wlr/types/wlr_data_device.h>
-#include <wlr/types/wlr_primary_selection.h>
 #include <wlr/util/log.h>
 #include <xcb/xfixes.h>
 #include "xwayland/selection.h"
 #include "xwayland/xwm.h"
 
-void xwm_selection_transfer_remove_source(
+void xwm_selection_transfer_remove_event_source(
 		struct wlr_xwm_selection_transfer *transfer) {
-	if (transfer->source != NULL) {
-		wl_event_source_remove(transfer->source);
-		transfer->source = NULL;
+	if (transfer->event_source != NULL) {
+		wl_event_source_remove(transfer->event_source);
+		transfer->event_source = NULL;
 	}
 }
 
-void xwm_selection_transfer_close_source_fd(
+void xwm_selection_transfer_close_wl_client_fd(
 		struct wlr_xwm_selection_transfer *transfer) {
-	if (transfer->source_fd >= 0) {
-		close(transfer->source_fd);
-		transfer->source_fd = -1;
+	if (transfer->wl_client_fd >= 0) {
+		close(transfer->wl_client_fd);
+		transfer->wl_client_fd = -1;
 	}
 }
 
@@ -31,6 +30,44 @@ void xwm_selection_transfer_destroy_property_reply(
 		struct wlr_xwm_selection_transfer *transfer) {
 	free(transfer->property_reply);
 	transfer->property_reply = NULL;
+}
+
+void xwm_selection_transfer_init(struct wlr_xwm_selection_transfer *transfer) {
+	transfer->wl_client_fd = -1;
+}
+
+void xwm_selection_transfer_finish(
+		struct wlr_xwm_selection_transfer *transfer) {
+	transfer->incr = false;
+	xwm_selection_transfer_destroy_property_reply(transfer);
+	xwm_selection_transfer_remove_event_source(transfer);
+	xwm_selection_transfer_close_wl_client_fd(transfer);
+}
+
+bool xwm_selection_transfer_get_selection_property(
+		struct wlr_xwm_selection_transfer *transfer, bool delete) {
+	struct wlr_xwm *xwm = transfer->selection->xwm;
+
+	xcb_get_property_cookie_t cookie = xcb_get_property(
+		xwm->xcb_conn,
+		delete,
+		transfer->selection->window,
+		xwm->atoms[WL_SELECTION],
+		XCB_GET_PROPERTY_TYPE_ANY,
+		0, // offset
+		0x1fffffff // length
+		);
+
+	transfer->property_start = 0;
+	transfer->property_reply =
+		xcb_get_property_reply(xwm->xcb_conn, cookie, NULL);
+
+	if (!transfer->property_reply) {
+		wlr_log(WLR_ERROR, "cannot get selection property");
+		return false;
+	}
+
+	return true;
 }
 
 xcb_atom_t xwm_mime_type_to_atom(struct wlr_xwm *xwm, char *mime_type) {
@@ -142,13 +179,14 @@ int xwm_handle_selection_event(struct wlr_xwm *xwm,
 	return 0;
 }
 
-static void selection_init(struct wlr_xwm *xwm,
-		struct wlr_xwm_selection *selection, xcb_atom_t atom) {
+void xwm_selection_init(struct wlr_xwm_selection *selection,
+		struct wlr_xwm *xwm, xcb_atom_t atom) {
 	selection->xwm = xwm;
 	selection->atom = atom;
 	selection->window = xwm->selection_window;
 	selection->incoming.selection = selection;
 	wl_list_init(&selection->outgoing);
+	xwm_selection_transfer_init(&selection->incoming);
 
 	uint32_t mask =
 		XCB_XFIXES_SELECTION_EVENT_MASK_SET_SELECTION_OWNER |
@@ -158,84 +196,18 @@ static void selection_init(struct wlr_xwm *xwm,
 		selection->atom, mask);
 }
 
-void xwm_selection_init(struct wlr_xwm *xwm) {
-	// Clipboard and primary selection
-	uint32_t selection_values[] = {
-		XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE
-	};
-	xwm->selection_window = xcb_generate_id(xwm->xcb_conn);
-	xcb_create_window(xwm->xcb_conn,
-		XCB_COPY_FROM_PARENT,
-		xwm->selection_window,
-		xwm->screen->root,
-		0, 0,
-		10, 10,
-		0,
-		XCB_WINDOW_CLASS_INPUT_OUTPUT,
-		xwm->screen->root_visual,
-		XCB_CW_EVENT_MASK, selection_values);
-
-	xcb_set_selection_owner(xwm->xcb_conn,
-		xwm->selection_window,
-		xwm->atoms[CLIPBOARD_MANAGER],
-		XCB_TIME_CURRENT_TIME);
-
-	selection_init(xwm, &xwm->clipboard_selection, xwm->atoms[CLIPBOARD]);
-	selection_init(xwm, &xwm->primary_selection, xwm->atoms[PRIMARY]);
-
-	// Drag'n'drop
-	uint32_t dnd_values[] = {
-		XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE
-	};
-	xwm->dnd_window = xcb_generate_id(xwm->xcb_conn);
-	xcb_create_window(xwm->xcb_conn,
-		XCB_COPY_FROM_PARENT,
-		xwm->dnd_window,
-		xwm->screen->root,
-		0, 0,
-		8192, 8192,
-		0,
-		XCB_WINDOW_CLASS_INPUT_ONLY,
-		xwm->screen->root_visual,
-		XCB_CW_EVENT_MASK, dnd_values);
-
-	uint32_t version = XDND_VERSION;
-	xcb_change_property(xwm->xcb_conn,
-		XCB_PROP_MODE_REPLACE,
-		xwm->dnd_window,
-		xwm->atoms[DND_AWARE],
-		XCB_ATOM_ATOM,
-		32, // format
-		1, &version);
-
-	selection_init(xwm, &xwm->dnd_selection, xwm->atoms[DND_SELECTION]);
-}
-
-void xwm_selection_finish(struct wlr_xwm *xwm) {
-	if (!xwm) {
+void xwm_selection_finish(struct wlr_xwm_selection *selection) {
+	if (!selection) {
 		return;
 	}
-	if (xwm->selection_window) {
-		xcb_destroy_window(xwm->xcb_conn, xwm->selection_window);
+
+	struct wlr_xwm_selection_transfer *outgoing, *tmp;
+	wl_list_for_each_safe(outgoing, tmp, &selection->outgoing, outgoing_link) {
+		wlr_log(WLR_INFO, "destroyed pending transfer %p", outgoing);
+		xwm_selection_transfer_destroy_outgoing(outgoing);
 	}
-	if (xwm->dnd_window) {
-		xcb_destroy_window(xwm->xcb_conn, xwm->dnd_window);
-	}
-	if (xwm->seat) {
-		if (xwm->seat->selection_source &&
-				data_source_is_xwayland(
-					xwm->seat->selection_source)) {
-			wlr_seat_set_selection(xwm->seat, NULL,
-				wl_display_next_serial(xwm->xwayland->wl_display));
-		}
-		if (xwm->seat->primary_selection_source &&
-				primary_selection_source_is_xwayland(
-					xwm->seat->primary_selection_source)) {
-			wlr_seat_set_primary_selection(xwm->seat, NULL,
-				wl_display_next_serial(xwm->xwayland->wl_display));
-		}
-		wlr_xwayland_set_seat(xwm->xwayland, NULL);
-	}
+
+	xwm_selection_transfer_finish(&selection->incoming);
 }
 
 static void xwm_selection_set_owner(struct wlr_xwm_selection *selection,

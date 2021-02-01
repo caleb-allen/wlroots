@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/util/log.h>
+#include "util/time.h"
 
 static bool colored = true;
 static enum wlr_log_importance log_importance = WLR_ERROR;
@@ -17,7 +18,7 @@ static const char *verbosity_colors[] = {
 	[WLR_SILENT] = "",
 	[WLR_ERROR] = "\x1B[1;31m",
 	[WLR_INFO] = "\x1B[1;34m",
-	[WLR_DEBUG] = "\x1B[1;30m",
+	[WLR_DEBUG] = "\x1B[1;90m",
 };
 
 static const char *verbosity_headers[] = {
@@ -26,17 +27,6 @@ static const char *verbosity_headers[] = {
 	[WLR_INFO] = "[INFO]",
 	[WLR_DEBUG] = "[DEBUG]",
 };
-
-static void timespec_sub(struct timespec *r, const struct timespec *a,
-		const struct timespec *b) {
-	const long NSEC_PER_SEC = 1000000000;
-	r->tv_sec = a->tv_sec - b->tv_sec;
-	r->tv_nsec = a->tv_nsec - b->tv_nsec;
-	if (r->tv_nsec < 0) {
-		r->tv_sec--;
-		r->tv_nsec += NSEC_PER_SEC;
-	}
-}
 
 static void init_start_time(void) {
 	if (start_time.tv_sec >= 0) {

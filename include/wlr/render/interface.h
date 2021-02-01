@@ -9,15 +9,6 @@
 #ifndef WLR_RENDER_INTERFACE_H
 #define WLR_RENDER_INTERFACE_H
 
-#ifndef MESA_EGL_NO_X11_HEADERS
-#define MESA_EGL_NO_X11_HEADERS
-#endif
-#ifndef EGL_NO_X11
-#define EGL_NO_X11
-#endif
-
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
 #include <stdbool.h>
 #include <wayland-server-protocol.h>
 #include <wlr/render/wlr_renderer.h>
@@ -27,27 +18,29 @@
 #include <wlr/render/dmabuf.h>
 
 struct wlr_renderer_impl {
+	bool (*bind_buffer)(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer);
 	void (*begin)(struct wlr_renderer *renderer, uint32_t width,
 		uint32_t height);
 	void (*end)(struct wlr_renderer *renderer);
 	void (*clear)(struct wlr_renderer *renderer, const float color[static 4]);
 	void (*scissor)(struct wlr_renderer *renderer, struct wlr_box *box);
-	bool (*render_texture_with_matrix)(struct wlr_renderer *renderer,
-		struct wlr_texture *texture, const float matrix[static 9],
-		float alpha);
+	bool (*render_subtexture_with_matrix)(struct wlr_renderer *renderer,
+		struct wlr_texture *texture, const struct wlr_fbox *box,
+		const float matrix[static 9], float alpha);
 	void (*render_quad_with_matrix)(struct wlr_renderer *renderer,
 		const float color[static 4], const float matrix[static 9]);
 	void (*render_ellipse_with_matrix)(struct wlr_renderer *renderer,
 		const float color[static 4], const float matrix[static 9]);
-	const enum wl_shm_format *(*formats)(
+	const enum wl_shm_format *(*get_shm_texture_formats)(
 		struct wlr_renderer *renderer, size_t *len);
-	bool (*format_supported)(struct wlr_renderer *renderer,
-		enum wl_shm_format fmt);
 	bool (*resource_is_wl_drm_buffer)(struct wlr_renderer *renderer,
 		struct wl_resource *resource);
 	void (*wl_drm_buffer_get_size)(struct wlr_renderer *renderer,
 		struct wl_resource *buffer, int *width, int *height);
-	const struct wlr_drm_format_set *(*get_dmabuf_formats)(
+	const struct wlr_drm_format_set *(*get_dmabuf_texture_formats)(
+		struct wlr_renderer *renderer);
+	const struct wlr_drm_format_set *(*get_dmabuf_render_formats)(
 		struct wlr_renderer *renderer);
 	enum wl_shm_format (*preferred_read_format)(struct wlr_renderer *renderer);
 	bool (*read_pixels)(struct wlr_renderer *renderer, enum wl_shm_format fmt,
@@ -64,6 +57,10 @@ struct wlr_renderer_impl {
 	void (*destroy)(struct wlr_renderer *renderer);
 	bool (*init_wl_display)(struct wlr_renderer *renderer,
 		struct wl_display *wl_display);
+	bool (*blit_dmabuf)(struct wlr_renderer *renderer,
+		struct wlr_dmabuf_attributes *dst,
+		struct wlr_dmabuf_attributes *src);
+	int (*get_drm_fd)(struct wlr_renderer *renderer);
 };
 
 void wlr_renderer_init(struct wlr_renderer *renderer,

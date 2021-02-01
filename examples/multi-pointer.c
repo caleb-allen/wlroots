@@ -10,13 +10,13 @@
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/backend/session.h>
-#include <wlr/render/gles2.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_list.h>
 #include <wlr/types/wlr_matrix.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_pointer.h>
 #include <wlr/util/log.h>
 #include <wlr/xcursor.h>
 #include <xkbcommon/xkbcommon.h>
@@ -271,7 +271,7 @@ int main(int argc, char *argv[]) {
 		.clear_color = { 0.25f, 0.25f, 0.25f, 1 },
 		.display = display,
 	};
-	struct wlr_backend *wlr = wlr_backend_autocreate(display, NULL);
+	struct wlr_backend *wlr = wlr_backend_autocreate(display);
 	if (!wlr) {
 		exit(1);
 	}

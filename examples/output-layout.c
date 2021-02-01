@@ -190,7 +190,7 @@ static void keyboard_key_notify(struct wl_listener *listener, void *data) {
 		// and make this change in pixels/sec^2
 		// Also, key repeat
 		int delta = 75;
-		if (event->state == WLR_KEY_PRESSED) {
+		if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 			switch (sym) {
 			case XKB_KEY_Left:
 				update_velocities(sample, -delta, 0);
@@ -267,7 +267,7 @@ int main(int argc, char *argv[]) {
 	state.layout = wlr_output_layout_create();
 	clock_gettime(CLOCK_MONOTONIC, &state.ts_last);
 
-	struct wlr_backend *wlr = wlr_backend_autocreate(display, NULL);
+	struct wlr_backend *wlr = wlr_backend_autocreate(display);
 	if (!wlr) {
 		exit(1);
 	}

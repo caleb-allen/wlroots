@@ -40,11 +40,14 @@ enum atom_name {
 	NET_ACTIVE_WINDOW,
 	NET_WM_MOVERESIZE,
 	NET_SUPPORTING_WM_CHECK,
+	NET_WM_STATE_FOCUSED,
 	NET_WM_STATE_MODAL,
 	NET_WM_STATE_FULLSCREEN,
 	NET_WM_STATE_MAXIMIZED_VERT,
 	NET_WM_STATE_MAXIMIZED_HORZ,
+	NET_WM_STATE_HIDDEN,
 	NET_WM_PING,
+	WM_CHANGE_STATE,
 	WM_STATE,
 	CLIPBOARD,
 	PRIMARY,
@@ -85,12 +88,6 @@ enum atom_name {
 
 extern const char *atom_map[ATOM_LAST];
 
-enum net_wm_state_action {
-	NET_WM_STATE_REMOVE = 0,
-	NET_WM_STATE_ADD = 1,
-	NET_WM_STATE_TOGGLE = 2,
-};
-
 struct wlr_xwm {
 	struct wlr_xwayland *xwayland;
 	struct wl_event_source *event_source;
@@ -126,6 +123,7 @@ struct wlr_xwm {
 #if WLR_HAS_XCB_ERRORS
 	xcb_errors_context_t *errors_context;
 #endif
+	unsigned int last_focus_seq;
 
 	struct wl_listener compositor_new_surface;
 	struct wl_listener compositor_destroy;
@@ -139,7 +137,7 @@ struct wlr_xwm {
 	struct wl_listener seat_drag_source_destroy;
 };
 
-struct wlr_xwm *xwm_create(struct wlr_xwayland *wlr_xwayland);
+struct wlr_xwm *xwm_create(struct wlr_xwayland *wlr_xwayland, int wm_fd);
 
 void xwm_destroy(struct wlr_xwm *xwm);
 

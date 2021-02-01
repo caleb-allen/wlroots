@@ -107,16 +107,12 @@ static void xdg_surface_handle_ack_configure(struct wl_client *client,
 		return;
 	}
 
+	// First find the ack'ed configure
 	bool found = false;
 	struct wlr_xdg_surface_configure *configure, *tmp;
-	wl_list_for_each_safe(configure, tmp, &surface->configure_list, link) {
-		if (configure->serial < serial) {
-			wlr_signal_emit_safe(&surface->events.ack_configure, configure);
-			xdg_surface_configure_destroy(configure);
-		} else if (configure->serial == serial) {
+	wl_list_for_each(configure, &surface->configure_list, link) {
+		if (configure->serial == serial) {
 			found = true;
-			break;
-		} else {
 			break;
 		}
 	}
@@ -125,6 +121,14 @@ static void xdg_surface_handle_ack_configure(struct wl_client *client,
 			XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
 			"wrong configure serial: %u", serial);
 		return;
+	}
+	// Then remove old configures from the list
+	wl_list_for_each_safe(configure, tmp, &surface->configure_list, link) {
+		if (configure->serial == serial) {
+			break;
+		}
+		wlr_signal_emit_safe(&surface->events.ack_configure, configure);
+		xdg_surface_configure_destroy(configure);
 	}
 
 	switch (surface->role) {
@@ -332,7 +336,9 @@ static void xdg_surface_handle_surface_commit(struct wl_listener *listener,
 		return;
 	}
 
-	if (surface->role == WLR_XDG_SURFACE_ROLE_NONE) {
+	// surface->role might be NONE for inert popups
+	// So we check surface->surface->role
+	if (surface->surface->role == NULL) {
 		wl_resource_post_error(surface->resource,
 			XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
 			"xdg_surface must have a role");
@@ -357,7 +363,8 @@ void handle_xdg_surface_commit(struct wlr_surface *wlr_surface) {
 
 	switch (surface->role) {
 	case WLR_XDG_SURFACE_ROLE_NONE:
-		assert(false);
+		// inert toplevel or popup
+		return;
 	case WLR_XDG_SURFACE_ROLE_TOPLEVEL:
 		handle_xdg_surface_toplevel_committed(surface);
 		break;
@@ -490,7 +497,7 @@ void reset_xdg_surface(struct wlr_xdg_surface *xdg_surface) {
 		break;
 	case WLR_XDG_SURFACE_ROLE_POPUP:
 		wl_resource_set_user_data(xdg_surface->popup->resource, NULL);
-		xdg_surface->toplevel->resource = NULL;
+		xdg_surface->popup->resource = NULL;
 
 		wl_list_remove(&xdg_surface->popup->link);
 
@@ -576,6 +583,17 @@ static void xdg_popup_get_position(struct wlr_xdg_popup *popup,
 struct wlr_surface *wlr_xdg_surface_surface_at(
 		struct wlr_xdg_surface *surface, double sx, double sy,
 		double *sub_x, double *sub_y) {
+	struct wlr_surface *sub = wlr_xdg_surface_popup_surface_at(surface, sx, sy,
+			sub_x, sub_y);
+	if (sub != NULL) {
+		return sub;
+	}
+	return wlr_surface_surface_at(surface->surface, sx, sy, sub_x, sub_y);
+}
+
+struct wlr_surface *wlr_xdg_surface_popup_surface_at(
+		struct wlr_xdg_surface *surface, double sx, double sy,
+		double *sub_x, double *sub_y) {
 	struct wlr_xdg_popup *popup_state;
 	wl_list_for_each(popup_state, &surface->popups, link) {
 		struct wlr_xdg_surface *popup = popup_state->base;
@@ -592,7 +610,7 @@ struct wlr_surface *wlr_xdg_surface_surface_at(
 		}
 	}
 
-	return wlr_surface_surface_at(surface->surface, sx, sy, sub_x, sub_y);
+	return NULL;
 }
 
 struct xdg_surface_iterator_data {
@@ -608,34 +626,7 @@ static void xdg_surface_iterator(struct wlr_surface *surface,
 		iter_data->user_data);
 }
 
-static void xdg_surface_for_each_surface(struct wlr_xdg_surface *surface,
-		int x, int y, wlr_surface_iterator_func_t iterator, void *user_data) {
-	struct xdg_surface_iterator_data data = {
-		.user_iterator = iterator,
-		.user_data = user_data,
-		.x = x, .y = y,
-	};
-	wlr_surface_for_each_surface(surface->surface, xdg_surface_iterator,
-		&data);
-
-	struct wlr_xdg_popup *popup_state;
-	wl_list_for_each(popup_state, &surface->popups, link) {
-		struct wlr_xdg_surface *popup = popup_state->base;
-		if (!popup->configured) {
-			continue;
-		}
-
-		double popup_sx, popup_sy;
-		xdg_popup_get_position(popup_state, &popup_sx, &popup_sy);
-
-		xdg_surface_for_each_surface(popup,
-			x + popup_sx,
-			y + popup_sy,
-			iterator, user_data);
-	}
-}
-
-static void xdg_surface_for_each_popup(struct wlr_xdg_surface *surface,
+static void xdg_surface_for_each_popup_surface(struct wlr_xdg_surface *surface,
 		int x, int y, wlr_surface_iterator_func_t iterator, void *user_data) {
 	struct wlr_xdg_popup *popup_state;
 	wl_list_for_each(popup_state, &surface->popups, link) {
@@ -646,9 +637,16 @@ static void xdg_surface_for_each_popup(struct wlr_xdg_surface *surface,
 
 		double popup_sx, popup_sy;
 		xdg_popup_get_position(popup_state, &popup_sx, &popup_sy);
-		iterator(popup->surface, x + popup_sx, y + popup_sy, user_data);
 
-		xdg_surface_for_each_popup(popup,
+		struct xdg_surface_iterator_data data = {
+			.user_iterator = iterator,
+			.user_data = user_data,
+			.x = x + popup_sx, .y = y + popup_sy,
+		};
+		wlr_surface_for_each_surface(popup->surface, xdg_surface_iterator,
+			&data);
+
+		xdg_surface_for_each_popup_surface(popup,
 			x + popup_sx,
 			y + popup_sy,
 			iterator, user_data);
@@ -657,12 +655,13 @@ static void xdg_surface_for_each_popup(struct wlr_xdg_surface *surface,
 
 void wlr_xdg_surface_for_each_surface(struct wlr_xdg_surface *surface,
 		wlr_surface_iterator_func_t iterator, void *user_data) {
-	xdg_surface_for_each_surface(surface, 0, 0, iterator, user_data);
+	wlr_surface_for_each_surface(surface->surface, iterator, user_data);
+	xdg_surface_for_each_popup_surface(surface, 0, 0, iterator, user_data);
 }
 
-void wlr_xdg_surface_for_each_popup(struct wlr_xdg_surface *surface,
+void wlr_xdg_surface_for_each_popup_surface(struct wlr_xdg_surface *surface,
 		wlr_surface_iterator_func_t iterator, void *user_data) {
-	xdg_surface_for_each_popup(surface, 0, 0, iterator, user_data);
+	xdg_surface_for_each_popup_surface(surface, 0, 0, iterator, user_data);
 }
 
 void wlr_xdg_surface_get_geometry(struct wlr_xdg_surface *surface,

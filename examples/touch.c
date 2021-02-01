@@ -14,7 +14,9 @@
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_list.h>
 #include <wlr/types/wlr_input_device.h>
+#include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_matrix.h>
+#include <wlr/types/wlr_touch.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 #include "cat.h"
@@ -76,13 +78,10 @@ static void output_frame_notify(struct wl_listener *listener, void *data) {
 	wlr_renderer_begin(sample->renderer, wlr_output->width, wlr_output->height);
 	wlr_renderer_clear(sample->renderer, (float[]){0.25f, 0.25f, 0.25f, 1});
 
-	int tex_width, tex_height;
-	wlr_texture_get_size(sample->cat_texture, &tex_width, &tex_height);
-
 	struct touch_point *p;
 	wl_list_for_each(p, &sample->touch_points, link) {
-		int x = (int)(p->x * width) - tex_width / 2;
-		int y = (int)(p->y * height) - tex_height / 2;
+		int x = (int)(p->x * width) - sample->cat_texture->width / 2;
+		int y = (int)(p->y * height) - sample->cat_texture->height / 2;
 		wlr_render_texture(sample->renderer, sample->cat_texture,
 			wlr_output->transform_matrix, x, y, 1.0f);
 	}
@@ -250,7 +249,7 @@ int main(int argc, char *argv[]) {
 	wl_list_init(&state.touch_points);
 	wl_list_init(&state.touch);
 
-	struct wlr_backend *wlr = wlr_backend_autocreate(display, NULL);
+	struct wlr_backend *wlr = wlr_backend_autocreate(display);
 	if (!wlr) {
 		exit(1);
 	}

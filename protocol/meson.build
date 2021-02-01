@@ -14,6 +14,7 @@ protocols = {
 	# Stable upstream protocols
 	'xdg-shell': wl_protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
 	'presentation-time': wl_protocol_dir / 'stable/presentation-time/presentation-time.xml',
+	'viewporter': wl_protocol_dir / 'stable/viewporter/viewporter.xml',
 	# Unstable upstream protocols
 	'fullscreen-shell-unstable-v1': wl_protocol_dir / 'unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml',
 	'idle-inhibit-unstable-v1': wl_protocol_dir / 'unstable/idle-inhibit/idle-inhibit-unstable-v1.xml',
@@ -26,9 +27,11 @@ protocols = {
 	'tablet-unstable-v2': wl_protocol_dir / 'unstable/tablet/tablet-unstable-v2.xml',
 	'text-input-unstable-v3': wl_protocol_dir / 'unstable/text-input/text-input-unstable-v3.xml',
 	'xdg-decoration-unstable-v1': wl_protocol_dir / 'unstable/xdg-decoration/xdg-decoration-unstable-v1.xml',
+	'xdg-foreign-unstable-v1': wl_protocol_dir / 'unstable/xdg-foreign/xdg-foreign-unstable-v1.xml',
+	'xdg-foreign-unstable-v2': wl_protocol_dir / 'unstable/xdg-foreign/xdg-foreign-unstable-v2.xml',
 	'xdg-output-unstable-v1': wl_protocol_dir / 'unstable/xdg-output/xdg-output-unstable-v1.xml',
-	'xdg-shell-unstable-v6': wl_protocol_dir / 'unstable/xdg-shell/xdg-shell-unstable-v6.xml',
 	# Other protocols
+	'drm': 'drm.xml',
 	'gtk-primary-selection': 'gtk-primary-selection.xml',
 	'kde-idle': 'idle.xml',
 	'kde-server-decoration': 'server-decoration.xml',

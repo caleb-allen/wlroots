@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 199309L
 #include <assert.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/mman.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
@@ -40,6 +41,14 @@ static struct wlr_virtual_keyboard_v1 *virtual_keyboard_from_resource(
 	return wl_resource_get_user_data(resource);
 }
 
+struct wlr_virtual_keyboard_v1 *wlr_input_device_get_virtual_keyboard(
+		struct wlr_input_device *wlr_dev) {
+	if (wlr_dev->impl != &input_device_impl) {
+		return NULL;
+	}
+	return (struct wlr_virtual_keyboard_v1 *)wlr_dev;
+}
+
 static void virtual_keyboard_keymap(struct wl_client *client,
 		struct wl_resource *resource, uint32_t format, int32_t fd,
 		uint32_t size) {
@@ -64,12 +73,14 @@ static void virtual_keyboard_keymap(struct wl_client *client,
 	keyboard->has_keymap = true;
 	xkb_keymap_unref(keymap);
 	xkb_context_unref(context);
+	close(fd);
 	return;
 keymap_fail:
 fd_fail:
 	xkb_context_unref(context);
 context_fail:
 	wl_client_post_no_memory(client);
+	close(fd);
 }
 
 static void virtual_keyboard_key(struct wl_client *client,

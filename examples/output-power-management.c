@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,7 +73,8 @@ static const struct wl_registry_listener registry_listener = {
 static const char usage[] = "usage: output-power-management [options...]\n"
 	"  -h: show this help message\n"
 	"  -e: turn outputs on\n"
-	"  -d: turn outputs off\n";
+	"  -d: turn outputs off\n"
+	"  -w: continuously watch for power mode changes\n";
 
 int main(int argc, char *argv[]) {
 	wl_list_init(&outputs);
@@ -80,13 +82,17 @@ int main(int argc, char *argv[]) {
 	int opt;
 	enum zwlr_output_power_v1_mode mode =
 		ZWLR_OUTPUT_POWER_V1_MODE_ON;
-	while ((opt = getopt(argc, argv, "edh")) != -1) {
+	bool watch_mode = false;
+	while ((opt = getopt(argc, argv, "edhw")) != -1) {
 		switch (opt) {
 		case 'e':
 			mode = ZWLR_OUTPUT_POWER_V1_MODE_ON;
 			break;
 		case 'd':
 			mode = ZWLR_OUTPUT_POWER_V1_MODE_OFF;
+			break;
+		case 'w':
+			watch_mode = true;
 			break;
 		case 'h':
 		default:
@@ -103,12 +109,11 @@ int main(int argc, char *argv[]) {
 
 	struct wl_registry *registry = wl_display_get_registry(display);
 	wl_registry_add_listener(registry, &registry_listener, NULL);
-	wl_display_dispatch(display);
 	wl_display_roundtrip(display);
 
 	if (output_power_manager == NULL) {
 		fprintf(stderr,
-			"compositor doesn't support wlr-output-power-managment-unstable-v1\n");
+			"compositor doesn't support wlr-output-power-management-unstable-v1\n");
 		return EXIT_FAILURE;
 	}
 
@@ -124,6 +129,11 @@ int main(int argc, char *argv[]) {
 	wl_list_for_each(output, &outputs, link) {
 		zwlr_output_power_v1_set_mode(output->output_power,
 			mode);
+	}
+
+	if (!watch_mode) {
+		wl_display_roundtrip(display);
+		return EXIT_SUCCESS;
 	}
 
 	while (wl_display_dispatch(display) != -1) {
