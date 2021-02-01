@@ -27,8 +27,6 @@ struct wlr_xwayland_server {
 
 	time_t server_start;
 
-	int32_t scale;
-
 	/* Anything above display is reset on Xwayland restart, rest is conserved */
 
 	int display;
@@ -67,6 +65,8 @@ struct wlr_xwayland {
 	struct wlr_xwayland_cursor *cursor;
 
 	const char *display_name;
+
+	int32_t scale;
 
 	struct wl_display *wl_display;
 	struct wlr_compositor *compositor;
