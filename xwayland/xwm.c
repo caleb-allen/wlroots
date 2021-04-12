@@ -1676,7 +1676,7 @@ static void xwm_get_resources(struct wlr_xwm *xwm) {
 		wlr_log(WLR_DEBUG, "xfixes not available");
 	}
 
-	xwm->xwayland_ext = xcb_get_extension_data(xwm->xcb_conn, &xwayland_ext_id);
+	xwm->xfixes = xcb_get_extension_data(xwm->xcb_conn, &xwayland_ext_id);
 
 	xcb_xfixes_query_version_cookie_t xfixes_cookie;
 	xcb_xfixes_query_version_reply_t *xfixes_reply;
