@@ -20,9 +20,9 @@ void wlr_texture_destroy(struct wlr_texture *texture) {
 }
 
 struct wlr_texture *wlr_texture_from_pixels(struct wlr_renderer *renderer,
-		enum wl_shm_format wl_fmt, uint32_t stride, uint32_t width,
-		uint32_t height, const void *data) {
-	return renderer->impl->texture_from_pixels(renderer, wl_fmt, stride, width,
+		uint32_t fmt, uint32_t stride, uint32_t width, uint32_t height,
+		const void *data) {
+	return renderer->impl->texture_from_pixels(renderer, fmt, stride, width,
 		height, data);
 }
 
@@ -64,12 +64,4 @@ bool wlr_texture_write_pixels(struct wlr_texture *texture,
 	}
 	return texture->impl->write_pixels(texture, stride, width, height,
 		src_x, src_y, dst_x, dst_y, data);
-}
-
-bool wlr_texture_to_dmabuf(struct wlr_texture *texture,
-		struct wlr_dmabuf_attributes *attribs) {
-	if (!texture->impl->to_dmabuf) {
-		return false;
-	}
-	return texture->impl->to_dmabuf(texture, attribs);
 }

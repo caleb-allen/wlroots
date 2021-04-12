@@ -172,6 +172,13 @@ struct wlr_egl *wlr_egl_create(EGLenum platform, void *remote_display) {
 		return NULL;
 	}
 
+	if (platform == EGL_PLATFORM_GBM_KHR) {
+		if (!check_egl_ext(client_exts_str, "EGL_KHR_platform_gbm")) {
+			wlr_log(WLR_ERROR, "EGL_KHR_platform_gbm not supported");
+			return NULL;
+		}
+	}
+
 	if (!check_egl_ext(client_exts_str, "EGL_EXT_platform_base")) {
 		wlr_log(WLR_ERROR, "EGL_EXT_platform_base not supported");
 		return NULL;
@@ -234,14 +241,6 @@ struct wlr_egl *wlr_egl_create(EGLenum platform, void *remote_display) {
 			"eglQueryDmaBufModifiersEXT");
 	}
 
-	if (check_egl_ext(display_exts_str, "EGL_MESA_image_dma_buf_export")) {
-		egl->exts.image_dma_buf_export_mesa = true;
-		load_egl_proc(&egl->procs.eglExportDMABUFImageQueryMESA,
-			"eglExportDMABUFImageQueryMESA");
-		load_egl_proc(&egl->procs.eglExportDMABUFImageMESA,
-			"eglExportDMABUFImageMESA");
-	}
-
 	if (check_egl_ext(display_exts_str, "EGL_WL_bind_wayland_display")) {
 		egl->exts.bind_wayland_display_wl = true;
 		load_egl_proc(&egl->procs.eglBindWaylandDisplayWL,
@@ -279,10 +278,13 @@ struct wlr_egl *wlr_egl_create(EGLenum platform, void *remote_display) {
 			if (allow_software != NULL && strcmp(allow_software, "1") == 0) {
 				wlr_log(WLR_INFO, "Using software rendering");
 			} else {
-				wlr_log(WLR_ERROR, "Software rendering detected, please use "
-						"the WLR_RENDERER_ALLOW_SOFTWARE environment variable "
-						"to proceed");
-				goto error;
+				// Because of a Mesa bug, sometimes EGL_MESA_device_software is
+				// advertised for hardware renderers. See:
+				// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4178
+				// TODO: fail without WLR_RENDERER_ALLOW_SOFTWARE
+				wlr_log(WLR_INFO, "Warning: software rendering may be in use");
+				wlr_log(WLR_INFO, "If you experience slow rendering, "
+					"please check the OpenGL drivers are correctly installed");
 			}
 		}
 
@@ -298,7 +300,7 @@ struct wlr_egl *wlr_egl_create(EGLenum platform, void *remote_display) {
 	}
 
 	if (!check_egl_ext(display_exts_str, "EGL_KHR_surfaceless_context")) {
-		wlr_log(WLR_ERROR, 
+		wlr_log(WLR_ERROR,
 			"EGL_KHR_surfaceless_context not supported");
 		goto error;
 	}
@@ -321,9 +323,9 @@ struct wlr_egl *wlr_egl_create(EGLenum platform, void *remote_display) {
 	attribs[atti++] = EGL_CONTEXT_CLIENT_VERSION;
 	attribs[atti++] = 2;
 
-	// On DRM, request a high priority context if possible
-	bool request_high_priority = ext_context_priority &&
-		platform == EGL_PLATFORM_GBM_MESA;
+	// Request a high priority context if possible
+	// TODO: only do this if we're running as the DRM master
+	bool request_high_priority = ext_context_priority;
 
 	// Try to reschedule all of our rendering to be completed first. If it
 	// fails, it will fallback to the default priority (MEDIUM).
@@ -689,37 +691,6 @@ const struct wlr_drm_format_set *wlr_egl_get_dmabuf_render_formats(
 	return &egl->dmabuf_render_formats;
 }
 
-bool wlr_egl_export_image_to_dmabuf(struct wlr_egl *egl, EGLImageKHR image,
-		int32_t width, int32_t height, uint32_t flags,
-		struct wlr_dmabuf_attributes *attribs) {
-	memset(attribs, 0, sizeof(struct wlr_dmabuf_attributes));
-
-	if (!egl->exts.image_dma_buf_export_mesa) {
-		return false;
-	}
-
-	// Only one set of modifiers is returned for all planes
-	if (!egl->procs.eglExportDMABUFImageQueryMESA(egl->display, image,
-			(int *)&attribs->format, &attribs->n_planes, &attribs->modifier)) {
-		return false;
-	}
-	if (attribs->n_planes > WLR_DMABUF_MAX_PLANES) {
-		wlr_log(WLR_ERROR, "EGL returned %d planes, but only %d are supported",
-			attribs->n_planes, WLR_DMABUF_MAX_PLANES);
-		return false;
-	}
-
-	if (!egl->procs.eglExportDMABUFImageMESA(egl->display, image, attribs->fd,
-			(EGLint *)attribs->stride, (EGLint *)attribs->offset)) {
-		return false;
-	}
-
-	attribs->width = width;
-	attribs->height = height;
-	attribs->flags = flags;
-	return true;
-}
-
 static bool device_has_name(const drmDevice *device, const char *name) {
 	for (size_t i = 0; i < DRM_NODE_MAX; i++) {
 		if (!(device->available_nodes & (1 << i))) {
@@ -763,7 +734,12 @@ static char *get_render_name(const char *name) {
 	if (match == NULL) {
 		wlr_log(WLR_ERROR, "Cannot find DRM device %s", name);
 	} else if (!(match->available_nodes & (1 << DRM_NODE_RENDER))) {
-		wlr_log(WLR_ERROR, "DRM device %s has no render node", name);
+		// Likely a split display/render setup. Pick the primary node and hope
+		// Mesa will open the right render node under-the-hood.
+		wlr_log(WLR_DEBUG, "DRM device %s has no render node, "
+			"falling back to primary node", name);
+		assert(match->available_nodes & (1 << DRM_NODE_PRIMARY));
+		render_name = strdup(match->nodes[DRM_NODE_PRIMARY]);
 	} else {
 		render_name = strdup(match->nodes[DRM_NODE_RENDER]);
 	}

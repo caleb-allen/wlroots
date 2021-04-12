@@ -15,6 +15,7 @@
 #include "backend/drm/util.h"
 #include "render/drm_format_set.h"
 #include "render/gbm_allocator.h"
+#include "render/pixel_format.h"
 #include "render/swapchain.h"
 #include "render/wlr_renderer.h"
 
@@ -114,7 +115,7 @@ bool drm_surface_make_current(struct wlr_drm_surface *surf,
 	}
 
 	if (!wlr_renderer_bind_buffer(surf->renderer->wlr_rend, surf->back_buffer)) {
-		wlr_log(WLR_ERROR, "Failed to attach buffer to renderer");
+		wlr_log(WLR_ERROR, "Failed to bind buffer to renderer");
 		return false;
 	}
 
@@ -156,7 +157,8 @@ static struct wlr_buffer *drm_surface_blit(struct wlr_drm_surface *surf,
 	}
 
 	float mat[9];
-	wlr_matrix_projection(mat, 1, 1, WL_OUTPUT_TRANSFORM_NORMAL);
+	wlr_matrix_identity(mat);
+	wlr_matrix_scale(mat, surf->width, surf->height);
 
 	wlr_renderer_begin(renderer, surf->width, surf->height);
 	wlr_renderer_clear(renderer, (float[]){ 0.0, 0.0, 0.0, 0.0 });
@@ -187,15 +189,6 @@ void drm_plane_finish_surface(struct wlr_drm_plane *plane) {
 	finish_drm_surface(&plane->mgpu_surf);
 }
 
-static uint32_t strip_alpha_channel(uint32_t format) {
-	switch (format) {
-	case DRM_FORMAT_ARGB8888:
-		return DRM_FORMAT_XRGB8888;
-	default:
-		return DRM_FORMAT_INVALID;
-	}
-}
-
 static struct wlr_drm_format *create_linear_format(uint32_t format) {
 	struct wlr_drm_format *fmt = wlr_drm_format_create(format);
 	if (fmt == NULL) {
@@ -212,8 +205,17 @@ bool drm_plane_init_surface(struct wlr_drm_plane *plane,
 		struct wlr_drm_backend *drm, int32_t width, uint32_t height,
 		uint32_t format, bool with_modifiers) {
 	if (!wlr_drm_format_set_has(&plane->formats, format, DRM_FORMAT_MOD_INVALID)) {
-		format = strip_alpha_channel(format);
+		const struct wlr_pixel_format_info *info =
+			drm_get_pixel_format_info(format);
+		if (!info) {
+			wlr_log(WLR_ERROR,
+				"Failed to fallback on DRM opaque substitute for format "
+				"0x%"PRIX32, format);
+			return false;
+		}
+		format = info->opaque_substitute;
 	}
+
 	const struct wlr_drm_format *plane_format =
 		wlr_drm_format_set_get(&plane->formats, format);
 	if (plane_format == NULL) {
@@ -317,6 +319,9 @@ bool drm_plane_lock_surface(struct wlr_drm_plane *plane,
 	wlr_buffer_unlock(buf);
 
 	bool ok = drm_fb_import(&plane->pending_fb, drm, local_buf, NULL);
+	if (!ok) {
+		wlr_log(WLR_ERROR, "Failed to import buffer");
+	}
 	wlr_buffer_unlock(local_buf);
 	return ok;
 }
@@ -368,12 +373,19 @@ static struct wlr_drm_fb *drm_fb_create(struct wlr_drm_backend *drm,
 		struct wlr_buffer *buf, const struct wlr_drm_format_set *formats) {
 	struct wlr_drm_fb *fb = calloc(1, sizeof(*fb));
 	if (!fb) {
+		wlr_log_errno(WLR_ERROR, "Allocation failed");
 		return NULL;
 	}
 
 	struct wlr_dmabuf_attributes attribs;
 	if (!wlr_buffer_get_dmabuf(buf, &attribs)) {
-		wlr_log(WLR_ERROR, "Failed to get DMA-BUF from buffer");
+		wlr_log(WLR_DEBUG, "Failed to get DMA-BUF from buffer");
+		goto error_get_dmabuf;
+	}
+
+	if (attribs.flags != 0) {
+		wlr_log(WLR_DEBUG, "Buffer with DMA-BUF flags 0x%"PRIX32" cannot be "
+			"scanned out", attribs.flags);
 		goto error_get_dmabuf;
 	}
 
@@ -381,25 +393,28 @@ static struct wlr_drm_fb *drm_fb_create(struct wlr_drm_backend *drm,
 			attribs.modifier)) {
 		// The format isn't supported by the plane. Try stripping the alpha
 		// channel, if any.
-		uint32_t format = strip_alpha_channel(attribs.format);
-		if (wlr_drm_format_set_has(formats, format, attribs.modifier)) {
-			attribs.format = format;
+		const struct wlr_pixel_format_info *info =
+			drm_get_pixel_format_info(attribs.format);
+		if (info != NULL && info->opaque_substitute != DRM_FORMAT_INVALID &&
+				wlr_drm_format_set_has(formats, info->opaque_substitute, attribs.modifier)) {
+			attribs.format = info->opaque_substitute;
 		} else {
-			wlr_log(WLR_ERROR, "Buffer format 0x%"PRIX32" cannot be scanned out",
-				attribs.format);
+			wlr_log(WLR_DEBUG, "Buffer format 0x%"PRIX32" with modifier "
+				"0x%"PRIX64" cannot be scanned out",
+				attribs.format, attribs.modifier);
 			goto error_get_dmabuf;
 		}
 	}
 
 	fb->bo = get_bo_for_dmabuf(drm->renderer.gbm, &attribs);
 	if (!fb->bo) {
-		wlr_log(WLR_ERROR, "Failed to import DMA-BUF in GBM");
+		wlr_log(WLR_DEBUG, "Failed to import DMA-BUF in GBM");
 		goto error_get_dmabuf;
 	}
 
 	fb->id = get_fb_for_bo(fb->bo, drm->addfb2_modifiers);
 	if (!fb->id) {
-		wlr_log(WLR_ERROR, "Failed to import GBM BO in KMS");
+		wlr_log(WLR_DEBUG, "Failed to import GBM BO in KMS");
 		goto error_get_fb_for_bo;
 	}
 

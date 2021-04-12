@@ -24,19 +24,19 @@
 #include "backend/drm/drm.h"
 #include "backend/drm/iface.h"
 #include "backend/drm/util.h"
+#include "render/pixel_format.h"
 #include "render/swapchain.h"
 #include "util/signal.h"
 
 bool check_drm_features(struct wlr_drm_backend *drm) {
 	uint64_t cap;
-	if (drm->parent) {
-		if (drmGetCap(drm->fd, DRM_CAP_PRIME, &cap) ||
-				!(cap & DRM_PRIME_CAP_IMPORT)) {
-			wlr_log(WLR_ERROR,
-				"PRIME import not supported on secondary GPU");
-			return false;
-		}
+	if (drmGetCap(drm->fd, DRM_CAP_PRIME, &cap) ||
+			!(cap & DRM_PRIME_CAP_IMPORT)) {
+		wlr_log(WLR_ERROR, "PRIME import not supported");
+		return false;
+	}
 
+	if (drm->parent) {
 		if (drmGetCap(drm->parent->fd, DRM_CAP_PRIME, &cap) ||
 				!(cap & DRM_PRIME_CAP_EXPORT)) {
 			wlr_log(WLR_ERROR,
@@ -378,15 +378,6 @@ static bool drm_crtc_page_flip(struct wlr_drm_connector *conn) {
 	return true;
 }
 
-static uint32_t strip_alpha_channel(uint32_t format) {
-	switch (format) {
-	case DRM_FORMAT_ARGB8888:
-		return DRM_FORMAT_XRGB8888;
-	default:
-		return DRM_FORMAT_INVALID;
-	}
-}
-
 static bool test_buffer(struct wlr_drm_connector *conn,
 		struct wlr_buffer *wlr_buffer) {
 	struct wlr_drm_backend *drm = conn->backend;
@@ -407,29 +398,11 @@ static bool test_buffer(struct wlr_drm_connector *conn,
 		return false;
 	}
 
-	struct wlr_dmabuf_attributes attribs;
-	if (!wlr_buffer_get_dmabuf(wlr_buffer, &attribs)) {
+	if (!drm_fb_import(&crtc->primary->pending_fb, drm, wlr_buffer,
+			&crtc->primary->formats)) {
 		return false;
 	}
-
-	if (attribs.flags != 0) {
-		return false;
-	}
-
-	if (!wlr_drm_format_set_has(&crtc->primary->formats,
-			attribs.format, attribs.modifier)) {
-		// The format isn't supported by the plane. Try stripping the alpha
-		// channel, if any.
-		uint32_t format = strip_alpha_channel(attribs.format);
-		if (format != DRM_FORMAT_INVALID && wlr_drm_format_set_has(
-				&crtc->primary->formats, format, attribs.modifier)) {
-			attribs.format = format;
-		} else {
-			return false;
-		}
-	}
-
-	return true;
+	return drm_crtc_commit(conn, DRM_MODE_ATOMIC_TEST_ONLY);
 }
 
 static bool drm_connector_test(struct wlr_output *output) {
@@ -493,11 +466,9 @@ static bool drm_connector_commit_buffer(struct wlr_output *output) {
 		break;
 	case WLR_OUTPUT_STATE_BUFFER_SCANOUT:;
 		struct wlr_buffer *buffer = output->pending.buffer;
-		if (!test_buffer(conn, output->pending.buffer)) {
-			return false;
-		}
 		if (!drm_fb_import(&plane->pending_fb, drm, buffer,
 				&crtc->primary->formats)) {
+			wlr_log(WLR_ERROR, "Failed to import buffer");
 			return false;
 		}
 		break;
@@ -895,10 +866,6 @@ static bool drm_connector_set_cursor(struct wlr_output *output,
 		}
 	}
 
-	float hotspot_proj[9];
-	wlr_matrix_projection(hotspot_proj, plane->surf.width,
-		plane->surf.height, output->transform);
-
 	struct wlr_box hotspot = { .x = hotspot_x, .y = hotspot_y };
 	wlr_box_transform(&hotspot, &hotspot,
 		wlr_output_transform_invert(output->transform),
@@ -939,8 +906,25 @@ static bool drm_connector_set_cursor(struct wlr_output *output,
 
 		struct wlr_box cursor_box = { .width = width, .height = height };
 
+		float output_matrix[9];
+		wlr_matrix_identity(output_matrix);
+		if (output->transform != WL_OUTPUT_TRANSFORM_NORMAL) {
+			struct wlr_box tr_size = {
+				.width = plane->surf.width,
+				.height = plane->surf.height,
+			};
+			wlr_box_transform(&tr_size, &tr_size, output->transform, 0, 0);
+
+			wlr_matrix_translate(output_matrix, plane->surf.width / 2.0,
+					plane->surf.height / 2.0);
+			wlr_matrix_transform(output_matrix, output->transform);
+			wlr_matrix_translate(output_matrix, - tr_size.width / 2.0,
+					- tr_size.height / 2.0);
+		}
+
 		float matrix[9];
-		wlr_matrix_project_box(matrix, &cursor_box, transform, 0, hotspot_proj);
+		wlr_matrix_project_box(matrix, &cursor_box, transform, 0,
+				output_matrix);
 
 		wlr_renderer_begin(rend, plane->surf.width, plane->surf.height);
 		wlr_renderer_clear(rend, (float[]){ 0.0, 0.0, 0.0, 0.0 });

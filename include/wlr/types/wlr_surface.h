@@ -31,6 +31,9 @@ enum wlr_surface_state_field {
 
 struct wlr_surface_state {
 	uint32_t committed; // enum wlr_surface_state_field
+	// Sequence number of the surface state. Incremented on each commit, may
+	// overflow.
+	uint32_t seq;
 
 	struct wl_resource *buffer_resource;
 	int32_t dx, dy; // relative to previous position
@@ -59,6 +62,10 @@ struct wlr_surface_state {
 	} viewport;
 
 	struct wl_listener buffer_destroy;
+
+	// Number of locks that prevent this surface state from being committed.
+	size_t cached_state_locks;
+	struct wl_list cached_state_link; // wlr_surface.cached
 };
 
 struct wlr_surface_role {
@@ -121,6 +128,8 @@ struct wlr_surface {
 	 */
 	struct wlr_surface_state current, pending, previous;
 
+	struct wl_list cached; // wlr_surface_state.cached_link
+
 	const struct wlr_surface_role *role; // the lifetime-bound role or NULL
 	void *role_data; // role-specific data
 
@@ -153,7 +162,7 @@ struct wlr_subsurface {
 
 	struct wlr_subsurface_state current, pending;
 
-	struct wlr_surface_state cached;
+	uint32_t cached_seq;
 	bool has_cache;
 
 	bool synchronized;
@@ -177,16 +186,6 @@ struct wlr_subsurface {
 
 typedef void (*wlr_surface_iterator_func_t)(struct wlr_surface *surface,
 	int sx, int sy, void *data);
-
-struct wlr_renderer;
-
-/**
- * Create a new surface resource with the provided new ID. If `resource_list`
- * is non-NULL, adds the surface's resource to the list.
- */
-struct wlr_surface *wlr_surface_create(struct wl_client *client,
-		uint32_t version, uint32_t id, struct wlr_renderer *renderer,
-		struct wl_list *resource_list);
 
 /**
  * Set the lifetime role for this surface. Returns 0 on success or -1 if the
@@ -289,5 +288,24 @@ void wlr_surface_get_effective_damage(struct wlr_surface *surface,
  */
 void wlr_surface_get_buffer_source_box(struct wlr_surface *surface,
 	struct wlr_fbox *box);
+
+/**
+ * Acquire a lock for the pending surface state.
+ *
+ * The state won't be committed before the caller releases the lock. Instead,
+ * the state becomes cached. The caller needs to use wlr_surface_unlock_cached
+ * to release the lock.
+ *
+ * Returns a surface commit sequence number for the cached state.
+ */
+uint32_t wlr_surface_lock_pending(struct wlr_surface *surface);
+
+/**
+ * Release a lock for a cached state.
+ *
+ * Callers should not assume that the cached state will immediately be
+ * committed. Another caller may still have an active lock.
+ */
+void wlr_surface_unlock_cached(struct wlr_surface *surface, uint32_t seq);
 
 #endif

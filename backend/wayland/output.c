@@ -119,11 +119,13 @@ static bool output_attach_render(struct wlr_output *wlr_output,
 	wlr_buffer_unlock(output->back_buffer);
 	output->back_buffer = wlr_swapchain_acquire(output->swapchain, buffer_age);
 	if (!output->back_buffer) {
+		wlr_log(WLR_ERROR, "Failed to acquire swapchain buffer");
 		return false;
 	}
 
 	if (!wlr_renderer_bind_buffer(output->backend->renderer,
 			output->back_buffer)) {
+		wlr_log(WLR_ERROR, "Failed to bind buffer to renderer");
 		return false;
 	}
 
@@ -360,6 +362,8 @@ static bool output_commit(struct wlr_output *wlr_output) {
 		}
 	}
 
+	wl_display_flush(output->backend->remote_display);
+
 	return true;
 }
 
@@ -427,11 +431,20 @@ static bool output_set_cursor(struct wlr_output *wlr_output,
 			.height = height,
 		};
 
-		float projection[9];
-		wlr_matrix_projection(projection, width, height, wlr_output->transform);
+		float output_matrix[9];
+		wlr_matrix_identity(output_matrix);
+		if (wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL) {
+			struct wlr_box tr_size = { .width = width, .height = height };
+			wlr_box_transform(&tr_size, &tr_size, wlr_output->transform, 0, 0);
+
+			wlr_matrix_translate(output_matrix, width / 2.0, height / 2.0);
+			wlr_matrix_transform(output_matrix, wlr_output->transform);
+			wlr_matrix_translate(output_matrix,
+				- tr_size.width / 2.0, - tr_size.height / 2.0);
+		}
 
 		float matrix[9];
-		wlr_matrix_project_box(matrix, &cursor_box, transform, 0, projection);
+		wlr_matrix_project_box(matrix, &cursor_box, transform, 0, output_matrix);
 
 		wlr_renderer_begin(backend->renderer, width, height);
 		wlr_renderer_clear(backend->renderer, (float[]){ 0.0, 0.0, 0.0, 0.0 });
@@ -460,6 +473,7 @@ static bool output_set_cursor(struct wlr_output *wlr_output,
 	}
 
 	update_wl_output_cursor(output);
+	wl_display_flush(backend->remote_display);
 	return true;
 }
 
@@ -494,6 +508,7 @@ static void output_destroy(struct wlr_output *wlr_output) {
 	xdg_toplevel_destroy(output->xdg_toplevel);
 	xdg_surface_destroy(output->xdg_surface);
 	wl_surface_destroy(output->surface);
+	wl_display_flush(output->backend->remote_display);
 	free(output);
 }
 
@@ -537,7 +552,7 @@ static void xdg_surface_handle_configure(void *data,
 	// nothing else?
 }
 
-static struct xdg_surface_listener xdg_surface_listener = {
+static const struct xdg_surface_listener xdg_surface_listener = {
 	.configure = xdg_surface_handle_configure,
 };
 
@@ -562,7 +577,7 @@ static void xdg_toplevel_handle_close(void *data,
 	wlr_output_destroy(&output->wlr_output);
 }
 
-static struct xdg_toplevel_listener xdg_toplevel_listener = {
+static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 	.configure = xdg_toplevel_handle_configure,
 	.close = xdg_toplevel_handle_close,
 };
@@ -679,6 +694,7 @@ void wlr_wl_output_set_title(struct wlr_output *output, const char *title) {
 	}
 
 	xdg_toplevel_set_title(wl_output->xdg_toplevel, title);
+	wl_display_flush(wl_output->backend->remote_display);
 }
 
 struct wl_surface *wlr_wl_output_get_surface(struct wlr_output *output) {

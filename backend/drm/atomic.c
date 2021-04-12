@@ -31,8 +31,10 @@ static bool atomic_commit(struct atomic *atom,
 	}
 
 	int ret = drmModeAtomicCommit(drm->fd, atom->req, flags, drm);
-	if (ret) {
-		wlr_drm_conn_log_errno(conn, WLR_ERROR, "Atomic %s failed (%s)",
+	if (ret != 0) {
+		wlr_drm_conn_log_errno(conn,
+			(flags & DRM_MODE_ATOMIC_TEST_ONLY) ? WLR_DEBUG : WLR_ERROR,
+			"Atomic %s failed (%s)",
 			(flags & DRM_MODE_ATOMIC_TEST_ONLY) ? "test" : "commit",
 			(flags & DRM_MODE_ATOMIC_ALLOW_MODESET) ? "modeset" : "pageflip");
 		return false;
@@ -202,7 +204,7 @@ static bool atomic_crtc_commit(struct wlr_drm_backend *drm,
 
 	if (crtc->pending_modeset) {
 		flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
-	} else {
+	} else if (!(flags & DRM_MODE_ATOMIC_TEST_ONLY)) {
 		flags |= DRM_MODE_ATOMIC_NONBLOCK;
 	}
 

@@ -12,6 +12,7 @@
 #include <wlr/types/wlr_matrix.h>
 #include <wlr/util/log.h>
 #include "render/gles2.h"
+#include "render/pixel_format.h"
 #include "util/signal.h"
 
 static const struct wlr_texture_impl texture_impl;
@@ -31,6 +32,21 @@ static bool gles2_texture_is_opaque(struct wlr_texture *wlr_texture) {
 	return !texture->has_alpha;
 }
 
+static bool check_stride(const struct wlr_pixel_format_info *fmt,
+		uint32_t stride, uint32_t width) {
+	if (stride % (fmt->bpp / 8) != 0) {
+		wlr_log(WLR_ERROR, "Invalid stride %d (incompatible with %d "
+			"bytes-per-pixel)", stride, fmt->bpp / 8);
+		return false;
+	}
+	if (stride < width * (fmt->bpp / 8)) {
+		wlr_log(WLR_ERROR, "Invalid stride %d (too small for %d "
+			"bytes-per-pixel and width %d)", stride, fmt->bpp / 8, width);
+		return false;
+	}
+	return true;
+}
+
 static bool gles2_texture_write_pixels(struct wlr_texture *wlr_texture,
 		uint32_t stride, uint32_t width, uint32_t height,
 		uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y,
@@ -43,8 +59,16 @@ static bool gles2_texture_write_pixels(struct wlr_texture *wlr_texture,
 	}
 
 	const struct wlr_gles2_pixel_format *fmt =
-		get_gles2_format_from_wl(texture->wl_format);
+		get_gles2_format_from_drm(texture->drm_format);
 	assert(fmt);
+
+	const struct wlr_pixel_format_info *drm_fmt =
+		drm_get_pixel_format_info(texture->drm_format);
+	assert(drm_fmt);
+
+	if (!check_stride(drm_fmt, stride, width)) {
+		return false;
+	}
 
 	struct wlr_egl_context prev_ctx;
 	wlr_egl_save_context(&prev_ctx);
@@ -54,7 +78,7 @@ static bool gles2_texture_write_pixels(struct wlr_texture *wlr_texture,
 
 	glBindTexture(GL_TEXTURE_2D, texture->tex);
 
-	glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, stride / (fmt->bpp / 8));
+	glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, stride / (drm_fmt->bpp / 8));
 	glPixelStorei(GL_UNPACK_SKIP_PIXELS_EXT, src_x);
 	glPixelStorei(GL_UNPACK_SKIP_ROWS_EXT, src_y);
 
@@ -72,34 +96,6 @@ static bool gles2_texture_write_pixels(struct wlr_texture *wlr_texture,
 	wlr_egl_restore_context(&prev_ctx);
 
 	return true;
-}
-
-static bool gles2_texture_to_dmabuf(struct wlr_texture *wlr_texture,
-		struct wlr_dmabuf_attributes *attribs) {
-	struct wlr_gles2_texture *texture = gles2_get_texture(wlr_texture);
-
-	if (!texture->image) {
-		assert(texture->target == GL_TEXTURE_2D);
-
-		if (!texture->renderer->egl->exts.image_base_khr) {
-			return false;
-		}
-
-		texture->image = texture->renderer->egl->procs.eglCreateImageKHR(
-			texture->renderer->egl->display, texture->renderer->egl->context, EGL_GL_TEXTURE_2D_KHR,
-			(EGLClientBuffer)(uintptr_t)texture->tex, NULL);
-		if (texture->image == EGL_NO_IMAGE_KHR) {
-			return false;
-		}
-	}
-
-	uint32_t flags = 0;
-	if (texture->inverted_y) {
-		flags |= WLR_DMABUF_ATTRIBUTES_FLAGS_Y_INVERT;
-	}
-
-	return wlr_egl_export_image_to_dmabuf(texture->renderer->egl, texture->image,
-		wlr_texture->width, wlr_texture->height, flags, attribs);
 }
 
 static void gles2_texture_destroy(struct wlr_texture *wlr_texture) {
@@ -128,18 +124,26 @@ static void gles2_texture_destroy(struct wlr_texture *wlr_texture) {
 static const struct wlr_texture_impl texture_impl = {
 	.is_opaque = gles2_texture_is_opaque,
 	.write_pixels = gles2_texture_write_pixels,
-	.to_dmabuf = gles2_texture_to_dmabuf,
 	.destroy = gles2_texture_destroy,
 };
 
 struct wlr_texture *gles2_texture_from_pixels(struct wlr_renderer *wlr_renderer,
-		enum wl_shm_format wl_fmt, uint32_t stride, uint32_t width,
+		uint32_t drm_format, uint32_t stride, uint32_t width,
 		uint32_t height, const void *data) {
 	struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
 
-	const struct wlr_gles2_pixel_format *fmt = get_gles2_format_from_wl(wl_fmt);
+	const struct wlr_gles2_pixel_format *fmt =
+		get_gles2_format_from_drm(drm_format);
 	if (fmt == NULL) {
-		wlr_log(WLR_ERROR, "Unsupported pixel format %"PRIu32, wl_fmt);
+		wlr_log(WLR_ERROR, "Unsupported pixel format 0x%"PRIX32, drm_format);
+		return NULL;
+	}
+
+	const struct wlr_pixel_format_info *drm_fmt =
+		drm_get_pixel_format_info(drm_format);
+	assert(drm_fmt);
+
+	if (!check_stride(drm_fmt, stride, width)) {
 		return NULL;
 	}
 
@@ -153,7 +157,7 @@ struct wlr_texture *gles2_texture_from_pixels(struct wlr_renderer *wlr_renderer,
 	texture->renderer = renderer;
 	texture->target = GL_TEXTURE_2D;
 	texture->has_alpha = fmt->has_alpha;
-	texture->wl_format = fmt->wl_format;
+	texture->drm_format = fmt->drm_format;
 
 	struct wlr_egl_context prev_ctx;
 	wlr_egl_save_context(&prev_ctx);
@@ -166,7 +170,7 @@ struct wlr_texture *gles2_texture_from_pixels(struct wlr_renderer *wlr_renderer,
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, stride / (fmt->bpp / 8));
+	glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, stride / (drm_fmt->bpp / 8));
 	glTexImage2D(GL_TEXTURE_2D, 0, fmt->gl_format, width, height, 0,
 		fmt->gl_format, fmt->gl_type, data);
 	glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, 0);
@@ -211,7 +215,7 @@ struct wlr_texture *gles2_texture_from_wl_drm(struct wlr_renderer *wlr_renderer,
 	wlr_texture_init(&texture->wlr_texture, &texture_impl, width, height);
 	texture->renderer = renderer;
 
-	texture->wl_format = 0xFFFFFFFF; // texture can't be written anyways
+	texture->drm_format = DRM_FORMAT_INVALID; // texture can't be written anyways
 	texture->image = image;
 	texture->inverted_y = inverted_y;
 
@@ -269,18 +273,6 @@ struct wlr_texture *gles2_texture_from_dmabuf(struct wlr_renderer *wlr_renderer,
 		return NULL;
 	}
 
-	switch (attribs->format & ~DRM_FORMAT_BIG_ENDIAN) {
-	case WL_SHM_FORMAT_YUYV:
-	case WL_SHM_FORMAT_YVYU:
-	case WL_SHM_FORMAT_UYVY:
-	case WL_SHM_FORMAT_VYUY:
-	case WL_SHM_FORMAT_AYUV:
-		// TODO: YUV based formats not yet supported, require multiple images
-		return false;
-	default:
-		break;
-	}
-
 	struct wlr_gles2_texture *texture =
 		calloc(1, sizeof(struct wlr_gles2_texture));
 	if (texture == NULL) {
@@ -291,7 +283,7 @@ struct wlr_texture *gles2_texture_from_dmabuf(struct wlr_renderer *wlr_renderer,
 		attribs->width, attribs->height);
 	texture->renderer = renderer;
 	texture->has_alpha = true;
-	texture->wl_format = 0xFFFFFFFF; // texture can't be written anyways
+	texture->drm_format = DRM_FORMAT_INVALID; // texture can't be written anyways
 	texture->inverted_y =
 		(attribs->flags & WLR_DMABUF_ATTRIBUTES_FLAGS_Y_INVERT) != 0;
 

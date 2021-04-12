@@ -16,6 +16,7 @@
 #include <wlr/xwayland.h>
 #include "sockets.h"
 #include "util/signal.h"
+#include "xwayland/config.h"
 
 static void safe_close(int fd) {
 	if (fd >= 0) {
@@ -63,8 +64,13 @@ noreturn static void exec_xwayland(struct wlr_xwayland_server *server) {
 	char *argv[] = {
 		"Xwayland", NULL /* display, e.g. :1 */,
 		"-rootless", "-terminate", "-core",
+#if HAVE_XWAYLAND_LISTENFD
+		"-listenfd", NULL /* x_fd[0] */,
+		"-listenfd", NULL /* x_fd[1] */,
+#else
 		"-listen", NULL /* x_fd[0] */,
 		"-listen", NULL /* x_fd[1] */,
+#endif
 		"-wm", NULL /* wm_fd[1] */,
 		NULL,
 	};
@@ -90,7 +96,7 @@ noreturn static void exec_xwayland(struct wlr_xwayland_server *server) {
 	snprintf(wayland_socket_str, sizeof(wayland_socket_str), "%d", server->wl_fd[1]);
 	setenv("WAYLAND_SOCKET", wayland_socket_str, true);
 
-	wlr_log(WLR_INFO, "WAYLAND_SOCKET=%d Xwayland :%d -rootless -terminate -core -listen %d -listen %d -wm %d",
+	wlr_log(WLR_INFO, "WAYLAND_SOCKET=%d Xwayland :%d -rootless -terminate -core -listenfd %d -listenfd %d -wm %d",
 		server->wl_fd[1], server->display, server->x_fd[0],
 		server->x_fd[1], server->wm_fd[1]);
 
@@ -442,6 +448,11 @@ void wlr_xwayland_server_destroy(struct wlr_xwayland_server *server) {
 struct wlr_xwayland_server *wlr_xwayland_server_create(
 		struct wl_display *wl_display,
 		struct wlr_xwayland_server_options *options) {
+	if (!getenv("WLR_XWAYLAND") && access(XWAYLAND_PATH, X_OK) != 0) {
+		wlr_log(WLR_ERROR, "Cannot find Xwayland binary \"%s\"", XWAYLAND_PATH);
+		return NULL;
+	}
+
 	struct wlr_xwayland_server *server =
 		calloc(1, sizeof(struct wlr_xwayland_server));
 	if (!server) {

@@ -55,30 +55,10 @@ static int xwm_selection_flush_source_data(
 static void xwm_selection_transfer_start_outgoing(
 		struct wlr_xwm_selection_transfer *transfer);
 
-static struct wlr_xwm_selection_transfer *xwm_selection_transfer_get_first(
-		struct wlr_xwm_selection *selection) {
-	struct wlr_xwm_selection_transfer *first = NULL;
-	if (!wl_list_empty(&selection->outgoing)) {
-		first = wl_container_of(selection->outgoing.prev, first,
-			outgoing_link);
-	}
-
-	return first;
-}
-
 void xwm_selection_transfer_destroy_outgoing(
 		struct wlr_xwm_selection_transfer *transfer) {
-	struct wlr_xwm_selection *selection = transfer->selection;
-	bool was_first = transfer == xwm_selection_transfer_get_first(selection);
-	wl_list_remove(&transfer->outgoing_link);
+	wl_list_remove(&transfer->link);
 	wlr_log(WLR_DEBUG, "Destroying transfer %p", transfer);
-
-	// Start next queued transfer if we just removed the active one.
-	if (was_first && !wl_list_empty(&selection->outgoing)) {
-		wlr_log(WLR_DEBUG, "Destroyed transfer was active, starting next");
-		xwm_selection_transfer_start_outgoing(
-			xwm_selection_transfer_get_first(selection));
-	}
 
 	xwm_selection_transfer_remove_event_source(transfer);
 	xwm_selection_transfer_close_wl_client_fd(transfer);
@@ -233,7 +213,6 @@ static void xwm_selection_transfer_start_outgoing(
 	struct wl_event_loop *loop =
 		wl_display_get_event_loop(xwm->xwayland->wl_display);
 	wlr_log(WLR_DEBUG, "Starting transfer %p", transfer);
-	assert(transfer == xwm_selection_transfer_get_first(transfer->selection));
 	transfer->event_source = wl_event_loop_add_fd(loop, transfer->wl_client_fd,
 		WL_EVENT_READABLE, xwm_data_source_read, transfer);
 }
@@ -297,8 +276,7 @@ static bool xwm_selection_send_data(struct wlr_xwm_selection *selection,
 		return false;
 	}
 
-	xwm_selection_transfer_init(transfer);
-	transfer->selection = selection;
+	xwm_selection_transfer_init(transfer, selection);
 	transfer->request = *req;
 	wl_array_init(&transfer->source_data);
 
@@ -325,26 +303,19 @@ static bool xwm_selection_send_data(struct wlr_xwm_selection *selection,
 	// from it. It appears to only ever read from the latest, so purge stale
 	// transfers to prevent clipboard hangs.
 	struct wlr_xwm_selection_transfer *outgoing, *tmp;
-	wl_list_for_each_safe(outgoing, tmp, &selection->outgoing, outgoing_link) {
+	wl_list_for_each_safe(outgoing, tmp, &selection->outgoing, link) {
 		if (transfer->request.requestor == outgoing->request.requestor) {
 			wlr_log(WLR_DEBUG, "Destroying stale transfer %p", outgoing);
 			xwm_selection_send_notify(selection->xwm, &outgoing->request, false);
 			xwm_selection_transfer_destroy_outgoing(outgoing);
+		} else {
+			wlr_log(WLR_DEBUG, "Transfer %p still running", outgoing);
 		}
 	}
 
-	wl_list_insert(&selection->outgoing, &transfer->outgoing_link);
+	wl_list_insert(&selection->outgoing, &transfer->link);
 
-	// We can only handle one transfer at a time
-	if (wl_list_length(&selection->outgoing) == 1) {
-		wlr_log(WLR_DEBUG, "No transfer active, starting %p now", transfer);
-		xwm_selection_transfer_start_outgoing(transfer);
-	} else {
-		struct wlr_xwm_selection_transfer *outgoing;
-		wl_list_for_each(outgoing, &selection->outgoing, outgoing_link) {
-			wlr_log(WLR_DEBUG, "Transfer %p still queued", outgoing);
-		}
-	}
+	xwm_selection_transfer_start_outgoing(transfer);
 
 	return true;
 }
@@ -421,9 +392,22 @@ void xwm_handle_selection_request(struct wlr_xwm *xwm,
 		goto fail_notify_requestor;
 	}
 
-	if (selection->window != req->owner) {
-		wlr_log(WLR_DEBUG, "received selection request with invalid owner");
+	if (req->requestor == selection->window) {
+		wlr_log(WLR_ERROR, "selection request should have been caught before");
 		goto fail_notify_requestor;
+	}
+
+	if (selection->window != req->owner) {
+		if (req->time != XCB_CURRENT_TIME && req->time < selection->timestamp) {
+			wlr_log(WLR_DEBUG, "ignored old request from timestamp %d; expected > %d",
+					req->time, selection->timestamp);
+			goto fail_notify_requestor;
+		}
+
+		wlr_log(WLR_DEBUG, "received selection request with invalid owner");
+		// Don't fail (`goto fail_notify_requestor`) the selection request if we're
+		// no longer the selection owner.
+		return;
 	}
 
 	// No xwayland surface focused, deny access to clipboard
@@ -477,7 +461,7 @@ void xwm_handle_selection_destroy_notify(struct wlr_xwm *xwm,
 		struct wlr_xwm_selection *selection = selections[i];
 
 		struct wlr_xwm_selection_transfer *outgoing, *tmp;
-		wl_list_for_each_safe(outgoing, tmp, &selection->outgoing, outgoing_link) {
+		wl_list_for_each_safe(outgoing, tmp, &selection->outgoing, link) {
 			if (event->window == outgoing->request.requestor) {
 				xwm_selection_transfer_destroy_outgoing(outgoing);
 			}

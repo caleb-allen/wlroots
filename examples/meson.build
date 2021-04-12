@@ -2,10 +2,14 @@ threads = dependency('threads')
 wayland_egl = dependency('wayland-egl')
 wayland_cursor = dependency('wayland-cursor')
 libpng = dependency('libpng', required: false, disabler: true)
+egl = dependency('egl', required: false, disabler: true)
+glesv2 = dependency('glesv2', required: false, disabler: true)
 # These versions correspond to ffmpeg 4.0
 libavutil = dependency('libavutil', version: '>=56.14.100', required: false, disabler: true)
 libavcodec = dependency('libavcodec', version: '>=58.18.100', required: false, disabler: true)
 libavformat = dependency('libavformat', version: '>=58.12.100', required: false, disabler: true)
+# Only needed for drm_fourcc.h
+libdrm = dependency('libdrm').partial_dependency(compile_args: true, includes: true)
 
 # epoll is a separate library in FreeBSD
 if host_machine.system() == 'freebsd'
@@ -55,7 +59,7 @@ clients = {
 	},
 	'idle-inhibit': {
 		'src': ['idle-inhibit.c', 'egl_common.c'],
-		'dep': [wayland_egl, wlroots],
+		'dep': [wayland_egl, egl, glesv2],
 		'proto': [
 			'idle-inhibit-unstable-v1',
 			'xdg-shell',
@@ -63,7 +67,7 @@ clients = {
 	},
 	'keyboard-shortcuts-inhibit': {
 		'src': ['keyboard-shortcuts-inhibit.c', 'egl_common.c'],
-		'dep': [wayland_egl, wayland_cursor, wlroots],
+		'dep': [wayland_egl, wayland_cursor, egl, glesv2],
 		'proto': [
 			'keyboard-shortcuts-inhibit-unstable-v1',
 			'xdg-shell',
@@ -71,7 +75,7 @@ clients = {
 	},
 	'layer-shell': {
 		'src': ['layer-shell.c', 'egl_common.c'],
-		'dep': [wayland_egl, wayland_cursor, wlroots],
+		'dep': [wayland_egl, wayland_cursor, wlroots, egl, glesv2],
 		'proto': [
 			'wlr-layer-shell-unstable-v1',
 			'xdg-shell',
@@ -79,7 +83,7 @@ clients = {
 	},
 	'input-inhibitor': {
 		'src': ['input-inhibitor.c', 'egl_common.c'],
-		'dep': [wayland_egl, wayland_cursor, wlroots],
+		'dep': [wayland_egl, wayland_cursor, egl, glesv2],
 		'proto': [
 			'wlr-input-inhibitor-unstable-v1',
 			'xdg-shell',
@@ -97,7 +101,7 @@ clients = {
 	},
 	'pointer-constraints': {
 		'src': ['pointer-constraints.c', 'egl_common.c'],
-		'dep': [wayland_egl, wlroots],
+		'dep': [wayland_egl, egl, glesv2],
 		'proto': [
 			'pointer-constraints-unstable-v1',
 			'xdg-shell',
@@ -105,7 +109,7 @@ clients = {
 	},
 	'relative-pointer': {
 		'src': ['relative-pointer-unstable-v1.c', 'egl_common.c'],
-		'dep': [wayland_egl, wlroots],
+		'dep': [wayland_egl, egl, glesv2],
 		'proto': [
 			'pointer-constraints-unstable-v1',
 			'relative-pointer-unstable-v1',
@@ -138,7 +142,7 @@ clients = {
 	},
 	'toplevel-decoration': {
 		'src': ['toplevel-decoration.c', 'egl_common.c'],
-		'dep': [wayland_egl, wlroots],
+		'dep': [wayland_egl, egl, glesv2],
 		'proto': [
 			'xdg-decoration-unstable-v1',
 			'xdg-shell',
@@ -155,7 +159,7 @@ clients = {
 	},
 	'text-input': {
 		'src': ['text-input.c', 'egl_common.c'],
-		'dep': [wayland_egl, wayland_cursor, wlroots],
+		'dep': [wayland_egl, wayland_cursor, egl, glesv2],
 		'proto': [
 			'text-input-unstable-v3',
 			'xdg-shell',
@@ -189,7 +193,7 @@ foreach name, info : compositors
 	executable(
 		name,
 		[info.get('src'), extra_src],
-		dependencies: wlroots,
+		dependencies: [wlroots, libdrm],
 		include_directories: [wlr_inc, proto_inc],
 		build_by_default: get_option('examples'),
 	)

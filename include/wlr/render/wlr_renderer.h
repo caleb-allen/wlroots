@@ -10,7 +10,7 @@
 #define WLR_RENDER_WLR_RENDERER_H
 
 #include <stdint.h>
-#include <wayland-server-protocol.h>
+#include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_box.h>
@@ -72,20 +72,10 @@ void wlr_render_rect(struct wlr_renderer *r, const struct wlr_box *box,
 void wlr_render_quad_with_matrix(struct wlr_renderer *r,
 	const float color[static 4], const float matrix[static 9]);
 /**
- * Renders a solid ellipse in the specified color.
- */
-void wlr_render_ellipse(struct wlr_renderer *r, const struct wlr_box *box,
-	const float color[static 4], const float projection[static 9]);
-/**
- * Renders a solid ellipse in the specified color with the specified matrix.
- */
-void wlr_render_ellipse_with_matrix(struct wlr_renderer *r,
-	const float color[static 4], const float matrix[static 9]);
-/**
  * Get the shared-memory formats supporting import usage. Buffers allocated
  * with a format from this list may be imported via wlr_texture_from_pixels.
  */
-const enum wl_shm_format *wlr_renderer_get_shm_texture_formats(
+const uint32_t *wlr_renderer_get_shm_texture_formats(
 	struct wlr_renderer *r, size_t *len);
 /**
  * Returns true if this wl_buffer is a wl_drm buffer.
@@ -110,15 +100,10 @@ const struct wlr_drm_format_set *wlr_renderer_get_dmabuf_texture_formats(
  * If `flags` is not NULl, the caller indicates that it accepts frame flags
  * defined in `enum wlr_renderer_read_pixels_flags`.
  */
-bool wlr_renderer_read_pixels(struct wlr_renderer *r, enum wl_shm_format fmt,
+bool wlr_renderer_read_pixels(struct wlr_renderer *r, uint32_t fmt,
 	uint32_t *flags, uint32_t stride, uint32_t width, uint32_t height,
 	uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y, void *data);
 
-/**
- * Blits the dmabuf in src onto the one in dst.
- */
-bool wlr_renderer_blit_dmabuf(struct wlr_renderer *r,
-	struct wlr_dmabuf_attributes *dst, struct wlr_dmabuf_attributes *src);
 /**
  * Creates necessary shm and invokes the initialization of the implementation.
  *

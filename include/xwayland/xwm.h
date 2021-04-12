@@ -5,10 +5,7 @@
 #include <wlr/config.h>
 #include <wlr/xwayland.h>
 #include <xcb/render.h>
-#if WLR_HAS_XCB_ICCCM
-#include <xcb/xcb_icccm.h>
-#endif
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 #include <xcb/xcb_errors.h>
 #endif
 #include "xwayland/selection.h"
@@ -86,7 +83,7 @@ enum atom_name {
 	ATOM_LAST // keep last
 };
 
-extern const char *atom_map[ATOM_LAST];
+extern const char *const atom_map[ATOM_LAST];
 
 struct wlr_xwm {
 	struct wlr_xwayland *xwayland;
@@ -103,11 +100,8 @@ struct wlr_xwm {
 	xcb_render_pictformat_t render_format_id;
 	xcb_cursor_t cursor;
 
-	xcb_window_t selection_window;
 	struct wlr_xwm_selection clipboard_selection;
 	struct wlr_xwm_selection primary_selection;
-
-	xcb_window_t dnd_window;
 	struct wlr_xwm_selection dnd_selection;
 
 	struct wlr_xwayland_surface *focus_surface;
@@ -119,8 +113,7 @@ struct wlr_xwm {
 	struct wlr_xwayland_surface *drag_focus;
 
 	const xcb_query_extension_reply_t *xfixes;
-	const xcb_query_extension_reply_t *xwayland_ext;
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	xcb_errors_context_t *errors_context;
 #endif
 	unsigned int last_focus_seq;

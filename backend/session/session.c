@@ -21,16 +21,12 @@
 #define WAIT_GPU_TIMEOUT 10000 // ms
 
 extern const struct session_impl session_libseat;
-extern const struct session_impl session_logind;
 extern const struct session_impl session_direct;
 extern const struct session_impl session_noop;
 
-static const struct session_impl *impls[] = {
+static const struct session_impl *const impls[] = {
 #if WLR_HAS_LIBSEAT
 	&session_libseat,
-#endif
-#if WLR_HAS_SYSTEMD || WLR_HAS_ELOGIND
-	&session_logind,
 #endif
 	&session_direct,
 	NULL,
@@ -121,13 +117,6 @@ struct wlr_session *wlr_session_create(struct wl_display *disp) {
 #else
 			wlr_log(WLR_ERROR, "wlroots is not compiled with libseat support");
 #endif
-		} else if (strcmp(env_wlr_session, "logind") == 0 ||
-				strcmp(env_wlr_session, "systemd") == 0) {
-#if WLR_HAS_SYSTEMD || WLR_HAS_ELOGIND
-			session = session_logind.create(disp);
-#else
-			wlr_log(WLR_ERROR, "wlroots is not compiled with logind support");
-#endif
 		} else if (strcmp(env_wlr_session, "direct") == 0) {
 			session = session_direct.create(disp);
 		} else if (strcmp(env_wlr_session, "noop") == 0) {
@@ -137,7 +126,7 @@ struct wlr_session *wlr_session_create(struct wl_display *disp) {
 				env_wlr_session);
 		}
 	} else {
-		const struct session_impl **iter;
+		const struct session_impl *const *iter;
 		for (iter = impls; !session && *iter; ++iter) {
 			session = (*iter)->create(disp);
 		}
@@ -265,12 +254,20 @@ static struct wlr_device *open_if_kms(struct wlr_session *restrict session,
 		return NULL;
 	}
 
-	drmVersion *ver = drmGetVersion(dev->fd);
-	if (!ver) {
+	// The kernel errors out with EOPNOTSUPP if DRIVER_MODESET isn't set
+	drmModeRes *res = drmModeGetResources(dev->fd);
+	if (!res) {
+		if (errno != EOPNOTSUPP) {
+			wlr_log_errno(WLR_ERROR, "drmModeGetResources(%s) failed", path);
+		}
 		goto out_dev;
 	}
+	if (res->count_crtcs == 0) {
+		drmModeFreeResources(res);
+		goto out_dev;
+	}
+	drmModeFreeResources(res);
 
-	drmFreeVersion(ver);
 	return dev;
 
 out_dev:

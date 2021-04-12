@@ -1,14 +1,10 @@
 wl_protocol_dir = wayland_protos.get_variable(pkgconfig: 'pkgdatadir')
 
-wayland_scanner_dep = dependency('wayland-scanner', required: false, native: true)
-if wayland_scanner_dep.found()
-	wayland_scanner = find_program(
-		wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'),
-		native: true,
-	)
-else
-	wayland_scanner = find_program('wayland-scanner', native: true)
-endif
+wayland_scanner_dep = dependency('wayland-scanner', native: true)
+wayland_scanner = find_program(
+	wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'),
+	native: true,
+)
 
 protocols = {
 	# Stable upstream protocols
@@ -32,7 +28,6 @@ protocols = {
 	'xdg-output-unstable-v1': wl_protocol_dir / 'unstable/xdg-output/xdg-output-unstable-v1.xml',
 	# Other protocols
 	'drm': 'drm.xml',
-	'gtk-primary-selection': 'gtk-primary-selection.xml',
 	'kde-idle': 'idle.xml',
 	'kde-server-decoration': 'server-decoration.xml',
 	'input-method-unstable-v2': 'input-method-unstable-v2.xml',

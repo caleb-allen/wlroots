@@ -1,9 +1,9 @@
 project(
 	'wlroots',
 	'c',
-	version: '0.12.0',
+	version: '0.14.0',
 	license: 'MIT',
-	meson_version: '>=0.54.0',
+	meson_version: '>=0.56.0',
 	default_options: [
 		'c_std=c11',
 		'warning_level=2',
@@ -15,7 +15,7 @@ project(
 # necessary for bugfix releases. Increasing soversion is required because
 # wlroots never guarantees ABI stability -- only API stability is guaranteed
 # between minor releases.
-soversion = 7
+soversion = 9
 
 add_project_arguments([
 	'-DWLR_USE_UNSTABLE',
@@ -36,6 +36,7 @@ add_project_arguments(cc.get_supported_arguments([
 	'-Wstrict-aliasing=2',
 	'-Woverflow',
 	'-Wmissing-prototypes',
+	'-Walloca',
 
 	'-Wno-missing-braces',
 	'-Wno-missing-field-initializers',
@@ -79,17 +80,16 @@ else
 	)
 endif
 
-conf_data = configuration_data()
-conf_data.set10('WLR_HAS_SYSTEMD', false)
-conf_data.set10('WLR_HAS_ELOGIND', false)
-conf_data.set10('WLR_HAS_LIBSEAT', false)
-conf_data.set10('WLR_HAS_X11_BACKEND', false)
-conf_data.set10('WLR_HAS_XWAYLAND', false)
-conf_data.set10('WLR_HAS_XCB_ERRORS', false)
-conf_data.set10('WLR_HAS_XCB_ICCCM', false)
-conf_data.set10('WLR_HAS_XDG_FOREIGN', false)
+features = {
+	'libseat': false,
+	'x11-backend': false,
+	'xwayland': false,
+}
+internal_features = {
+	'xcb-errors': false,
+}
 
-wayland_server = dependency('wayland-server', version: '>=1.18')
+wayland_server = dependency('wayland-server', version: '>=1.19')
 wayland_client = dependency('wayland-client')
 wayland_protos = dependency('wayland-protocols', version: '>=1.17')
 egl = dependency('egl')
@@ -103,16 +103,6 @@ pixman = dependency('pixman-1')
 math = cc.find_library('m')
 rt = cc.find_library('rt')
 
-if not get_option('xdg-foreign').disabled()
-	uuid = dependency('uuid', required: false)
-	uuid_create = cc.has_function('uuid_create')
-	if uuid.found() or uuid_create
-		conf_data.set10('WLR_HAS_XDG_FOREIGN', true)
-	elif get_option('xdg-foreign').enabled()
-		error('Missing dependency uuid and uuid_create function not available ' +
-				'cannot build with xdg-foreign support')
-	endif
-endif
 
 wlr_files = []
 wlr_deps = [
@@ -142,6 +132,13 @@ subdir('xwayland')
 
 subdir('include')
 
+foreach name, have : internal_features
+	add_project_arguments(
+		'-DHAS_@0@=@1@'.format(name.underscorify().to_upper(), have.to_int()),
+		language: 'c',
+	)
+endforeach
+
 wlr_inc = include_directories('.', 'include')
 proto_inc = include_directories('protocol')
 
@@ -153,28 +150,25 @@ lib_wlr = library(
 	dependencies: wlr_deps,
 	include_directories: [wlr_inc, proto_inc],
 	install: true,
-	link_args : symbols_flag,
+	link_args: symbols_flag,
 	link_depends: symbols_file,
 )
+
+wlr_vars = {}
+foreach name, have : features
+	wlr_vars += { 'have_' + name.underscorify(): have.to_string() }
+endforeach
 
 wlroots = declare_dependency(
 	link_with: lib_wlr,
 	dependencies: wlr_deps,
 	include_directories: wlr_inc,
+	variables: wlr_vars,
 )
 
 meson.override_dependency('wlroots', wlroots)
 
-summary({
-	'systemd': conf_data.get('WLR_HAS_SYSTEMD', 0) == 1,
-	'elogind': conf_data.get('WLR_HAS_ELOGIND', 0) == 1,
-	'libseat': conf_data.get('WLR_HAS_LIBSEAT', 0) == 1,
-	'xwayland': conf_data.get('WLR_HAS_XWAYLAND', 0) == 1,
-	'x11-backend': conf_data.get('WLR_HAS_X11_BACKEND', 0) == 1,
-	'xcb-icccm': conf_data.get('WLR_HAS_XCB_ICCCM', 0) == 1,
-	'xcb-errors': conf_data.get('WLR_HAS_XCB_ERRORS', 0) == 1,
-	'xdg-foreign': conf_data.get('WLR_HAS_XDG_FOREIGN', 0) == 1,
-}, bool_yn: true)
+summary(features + internal_features, bool_yn: true)
 
 if get_option('examples')
 	subdir('examples')
@@ -186,4 +180,5 @@ pkgconfig.generate(lib_wlr,
 	filebase: meson.project_name(),
 	name: meson.project_name(),
 	description: 'Wayland compositor library',
+	variables: wlr_vars,
 )

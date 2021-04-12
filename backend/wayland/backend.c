@@ -143,7 +143,12 @@ static char *get_render_name(const char *name) {
 	if (match == NULL) {
 		wlr_log(WLR_ERROR, "Cannot find DRM device %s", name);
 	} else if (!(match->available_nodes & (1 << DRM_NODE_RENDER))) {
-		wlr_log(WLR_ERROR, "DRM device %s has no render node", name);
+		// Likely a split display/render setup. Pick the primary node and hope
+		// Mesa will open the right render node under-the-hood.
+		wlr_log(WLR_DEBUG, "DRM device %s has no render node, "
+			"falling back to primary node", name);
+		assert(match->available_nodes & (1 << DRM_NODE_PRIMARY));
+		render_name = strdup(match->nodes[DRM_NODE_PRIMARY]);
 	} else {
 		render_name = strdup(match->nodes[DRM_NODE_RENDER]);
 	}
@@ -324,6 +329,7 @@ static void backend_destroy(struct wlr_backend *backend) {
 	xdg_wm_base_destroy(wl->xdg_wm_base);
 	wl_compositor_destroy(wl->compositor);
 	wl_registry_destroy(wl->registry);
+	wl_display_flush(wl->remote_display);
 	wl_display_disconnect(wl->remote_display);
 	free(wl);
 }
@@ -338,7 +344,7 @@ static int backend_get_drm_fd(struct wlr_backend *backend) {
 	return wl->drm_fd;
 }
 
-static struct wlr_backend_impl backend_impl = {
+static const struct wlr_backend_impl backend_impl = {
 	.start = backend_start,
 	.destroy = backend_destroy,
 	.get_renderer = backend_get_renderer,

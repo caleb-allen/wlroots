@@ -14,11 +14,11 @@
 #include <wlr/xwayland.h>
 #include <xcb/composite.h>
 #include <xcb/render.h>
+#include <xcb/xcb_icccm.h>
 #include <xcb/xfixes.h>
 #include <xcb/xcbext.h>
 #include "util/signal.h"
 #include "xwayland/xwm.h"
-
 
 static int32_t scale(struct wlr_xwm *xwm, int32_t val) {
 	return val * xwm->xwayland->scale;
@@ -31,8 +31,7 @@ static int32_t unscale(struct wlr_xwm *xwm, int32_t val) {
 static xcb_extension_t xwayland_ext_id = {
 	.name = "XWAYLAND",
 };
-
-const char *atom_map[ATOM_LAST] = {
+const char *const atom_map[ATOM_LAST] = {
 	[WL_SURFACE_ID] = "WL_SURFACE_ID",
 	[WM_DELETE_WINDOW] = "WM_DELETE_WINDOW",
 	[WM_PROTOCOLS] = "WM_PROTOCOLS",
@@ -577,7 +576,6 @@ static void read_surface_protocols(struct wlr_xwm *xwm,
 	xsurface->protocols_len = atoms_len;
 }
 
-#if WLR_HAS_XCB_ICCCM
 static void read_surface_hints(struct wlr_xwm *xwm,
 		struct wlr_xwayland_surface *xsurface,
 		xcb_get_property_reply_t *reply) {
@@ -607,15 +605,7 @@ static void read_surface_hints(struct wlr_xwm *xwm,
 
 	wlr_signal_emit_safe(&xsurface->events.set_hints, xsurface);
 }
-#else
-static void read_surface_hints(struct wlr_xwm *xwm,
-		struct wlr_xwayland_surface *xsurface,
-		xcb_get_property_reply_t *reply) {
-	// Do nothing
-}
-#endif
 
-#if WLR_HAS_XCB_ICCCM
 static void read_surface_normal_hints(struct wlr_xwm *xwm,
 		struct wlr_xwayland_surface *xsurface,
 		xcb_get_property_reply_t *reply) {
@@ -656,14 +646,6 @@ static void read_surface_normal_hints(struct wlr_xwm *xwm,
 		xsurface->size_hints->max_height = -1;
 	}
 }
-#else
-static void read_surface_normal_hints(struct wlr_xwm *xwm,
-		struct wlr_xwayland_surface *xsurface,
-		xcb_get_property_reply_t *reply) {
-	// Do nothing
-}
-#endif
-
 
 #define MWM_HINTS_FLAGS_FIELD 0
 #define MWM_HINTS_DECORATIONS_FIELD 2
@@ -878,8 +860,9 @@ static void xsurface_unmap(struct wlr_xwayland_surface *surface) {
 static void xwm_handle_create_notify(struct wlr_xwm *xwm,
 		xcb_create_notify_event_t *ev) {
 	if (ev->window == xwm->window ||
-			ev->window == xwm->selection_window ||
-			ev->window == xwm->dnd_window) {
+			ev->window == xwm->primary_selection.window ||
+			ev->window == xwm->clipboard_selection.window ||
+			ev->window == xwm->dnd_selection.window) {
 		return;
 	}
 
@@ -958,10 +941,6 @@ static void xwm_handle_configure_notify(struct wlr_xwm *xwm,
 	}
 }
 
-#define ICCCM_WITHDRAWN_STATE	0
-#define ICCCM_NORMAL_STATE	1
-#define ICCCM_ICONIC_STATE	3
-
 static void xsurface_set_wm_state(struct wlr_xwayland_surface *xsurface,
 		int32_t state) {
 	struct wlr_xwm *xwm = xsurface->xwm;
@@ -983,7 +962,7 @@ static void xwm_handle_map_request(struct wlr_xwm *xwm,
 		return;
 	}
 
-	xsurface_set_wm_state(xsurface, ICCCM_NORMAL_STATE);
+	xsurface_set_wm_state(xsurface, XCB_ICCCM_WM_STATE_NORMAL);
 	xsurface_set_net_wm_state(xsurface);
 
 	uint32_t values[1];
@@ -1015,7 +994,7 @@ static void xwm_handle_unmap_notify(struct wlr_xwm *xwm,
 	}
 
 	xsurface_unmap(xsurface);
-	xsurface_set_wm_state(xsurface, ICCCM_WITHDRAWN_STATE);
+	xsurface_set_wm_state(xsurface, XCB_ICCCM_WM_STATE_WITHDRAWN);
 }
 
 static void xwm_handle_property_notify(struct wlr_xwm *xwm,
@@ -1288,9 +1267,9 @@ static void xwm_handle_wm_change_state_message(struct wlr_xwm *xwm,
 	}
 
 	bool minimize;
-	if (detail == ICCCM_ICONIC_STATE) {
+	if (detail == XCB_ICCCM_WM_STATE_ICONIC) {
 		minimize = true;
-	} else if (detail == ICCCM_NORMAL_STATE) {
+	} else if (detail == XCB_ICCCM_WM_STATE_NORMAL) {
 		minimize = false;
 	} else {
 		wlr_log(WLR_DEBUG, "unhandled wm_change_state event %u", detail);
@@ -1368,7 +1347,7 @@ static void xwm_handle_focus_in(struct wlr_xwm *xwm,
 }
 
 static void xwm_handle_xcb_error(struct wlr_xwm *xwm, xcb_value_error_t *ev) {
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	const char *major_name =
 		xcb_errors_get_name_for_major_code(xwm->errors_context,
 			ev->major_opcode);
@@ -1406,7 +1385,7 @@ log_raw:
 }
 
 static void xwm_handle_unhandled_event(struct wlr_xwm *xwm, xcb_generic_event_t *ev) {
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	const char *extension;
 	const char *event_name =
 		xcb_errors_get_name_for_xcb_event(xwm->errors_context,
@@ -1613,14 +1592,6 @@ void xwm_destroy(struct wlr_xwm *xwm) {
 	xwm_selection_finish(&xwm->primary_selection);
 	xwm_selection_finish(&xwm->dnd_selection);
 
-	if (xwm->selection_window) {
-		xcb_destroy_window(xwm->xcb_conn, xwm->selection_window);
-	}
-
-	if (xwm->dnd_window) {
-		xcb_destroy_window(xwm->xcb_conn, xwm->dnd_window);
-	}
-
 	if (xwm->seat) {
 		if (xwm->seat->selection_source &&
 				data_source_is_xwayland(xwm->seat->selection_source)) {
@@ -1650,7 +1621,7 @@ void xwm_destroy(struct wlr_xwm *xwm) {
 	if (xwm->event_source) {
 		wl_event_source_remove(xwm->event_source);
 	}
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	if (xwm->errors_context) {
 		xcb_errors_context_free(xwm->errors_context);
 	}
@@ -1867,6 +1838,7 @@ void xwm_set_cursor(struct wlr_xwm *xwm, const uint8_t *pixels, uint32_t stride,
 	xcb_render_create_cursor(xwm->xcb_conn, xwm->cursor, pic, hotspot_x,
 		hotspot_y);
 	xcb_free_pixmap(xwm->xcb_conn, pix);
+	xcb_render_free_picture(xwm->xcb_conn, pic);
 
 	uint32_t values[] = {xwm->cursor};
 	xcb_change_window_attributes(xwm->xcb_conn, xwm->screen->root,
@@ -1894,7 +1866,7 @@ struct wlr_xwm *xwm_create(struct wlr_xwayland *xwayland, int wm_fd) {
 		return NULL;
 	}
 
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	if (xcb_errors_context_new(xwm->xcb_conn, &xwm->errors_context)) {
 		wlr_log(WLR_ERROR, "Could not allocate error context");
 		xwm_destroy(xwm);
@@ -1955,56 +1927,8 @@ struct wlr_xwm *xwm_create(struct wlr_xwayland *xwayland, int wm_fd) {
 
 	xwm_set_net_active_window(xwm, XCB_WINDOW_NONE);
 
-	// Clipboard and primary selection
-	xwm->selection_window = xcb_generate_id(xwm->xcb_conn);
-	xcb_create_window(
-		xwm->xcb_conn,
-		XCB_COPY_FROM_PARENT,
-		xwm->selection_window,
-		xwm->screen->root,
-		0, 0,
-		10, 10,
-		0,
-		XCB_WINDOW_CLASS_INPUT_OUTPUT,
-		xwm->screen->root_visual,
-		XCB_CW_EVENT_MASK, (uint32_t[]){
-			XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE
-		}
-	);
-
-	xcb_set_selection_owner(xwm->xcb_conn, xwm->selection_window,
-		xwm->atoms[CLIPBOARD_MANAGER], XCB_TIME_CURRENT_TIME);
-
 	xwm_selection_init(&xwm->clipboard_selection, xwm, xwm->atoms[CLIPBOARD]);
 	xwm_selection_init(&xwm->primary_selection, xwm, xwm->atoms[PRIMARY]);
-
-	// Drag'n'drop
-	xwm->dnd_window = xcb_generate_id(xwm->xcb_conn);
-	xcb_create_window(
-		xwm->xcb_conn,
-		XCB_COPY_FROM_PARENT,
-		xwm->dnd_window,
-		xwm->screen->root,
-		0, 0,
-		8192, 8192,
-		0,
-		XCB_WINDOW_CLASS_INPUT_ONLY,
-		xwm->screen->root_visual,
-		XCB_CW_EVENT_MASK, (uint32_t[]){
-			XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE
-		}
-	);
-
-	xcb_change_property(
-		xwm->xcb_conn,
-		XCB_PROP_MODE_REPLACE,
-		xwm->dnd_window,
-		xwm->atoms[DND_AWARE],
-		XCB_ATOM_ATOM,
-		32, // format
-		1, &(uint32_t){XDND_VERSION}
-	);
-
 	xwm_selection_init(&xwm->dnd_selection, xwm, xwm->atoms[DND_SELECTION]);
 
 	xwm->compositor_new_surface.notify = handle_compositor_new_surface;
@@ -2026,9 +1950,9 @@ void wlr_xwayland_surface_set_minimized(struct wlr_xwayland_surface *surface,
 	surface->minimized = minimized;
 
 	if (minimized) {
-		xsurface_set_wm_state(surface, ICCCM_ICONIC_STATE);
+		xsurface_set_wm_state(surface, XCB_ICCCM_WM_STATE_ICONIC);
 	} else {
-		xsurface_set_wm_state(surface, ICCCM_NORMAL_STATE);
+		xsurface_set_wm_state(surface, XCB_ICCCM_WM_STATE_NORMAL);
 	}
 
 	xsurface_set_net_wm_state(surface);
@@ -2106,7 +2030,7 @@ enum wlr_xwayland_icccm_input_model wlr_xwayland_icccm_input_model(
 		xsurface->protocols, xsurface->protocols_len,
 		WM_TAKE_FOCUS);
 
-	if (xsurface->hints && xsurface->hints->input) {
+	if (!xsurface->hints || xsurface->hints->input) {
 		if (take_focus) {
 			return WLR_ICCCM_INPUT_MODEL_LOCAL;
 		}

@@ -12,11 +12,12 @@
 #include <wlr/config.h>
 
 #include <drm_fourcc.h>
-#include <X11/Xlib-xcb.h>
 #include <wayland-server-core.h>
 #include <xcb/xcb.h>
 #include <xcb/dri3.h>
 #include <xcb/present.h>
+#include <xcb/render.h>
+#include <xcb/xcb_renderutil.h>
 #include <xcb/xfixes.h>
 #include <xcb/xinput.h>
 
@@ -190,15 +191,12 @@ static void backend_destroy(struct wlr_backend *backend) {
 	wlr_drm_format_set_finish(&x11->dri3_formats);
 	free(x11->drm_format);
 
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	xcb_errors_context_free(x11->errors_context);
 #endif
 
 	close(x11->drm_fd);
-
-	if (x11->xlib_conn) {
-		XCloseDisplay(x11->xlib_conn);
-	}
+	xcb_disconnect(x11->xcb);
 	free(x11);
 }
 
@@ -355,6 +353,29 @@ static bool query_dri3_formats(struct wlr_x11_backend *x11) {
 	return true;
 }
 
+static void x11_get_argb32(struct wlr_x11_backend *x11) {
+	xcb_render_query_pict_formats_cookie_t cookie =
+		xcb_render_query_pict_formats(x11->xcb);
+	xcb_render_query_pict_formats_reply_t *reply =
+		xcb_render_query_pict_formats_reply(x11->xcb, cookie, NULL);
+	if (!reply) {
+		wlr_log(WLR_ERROR, "Did not get any reply from xcb_render_query_pict_formats");
+		return;
+	}
+
+	xcb_render_pictforminfo_t *format =
+		xcb_render_util_find_standard_format(reply, XCB_PICT_STANDARD_ARGB_32);
+
+	if (format == NULL) {
+		wlr_log(WLR_DEBUG, "No ARGB_32 render format");
+		free(reply);
+		return;
+	}
+
+	x11->argb32 = format->id;
+	free(reply);
+}
+
 struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 		const char *x11_display) {
 	wlr_log(WLR_INFO, "Creating X11 backend");
@@ -368,19 +389,11 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 	x11->wl_display = display;
 	wl_list_init(&x11->outputs);
 
-	x11->xlib_conn = XOpenDisplay(x11_display);
-	if (!x11->xlib_conn) {
-		wlr_log(WLR_ERROR, "Failed to open X connection");
-		goto error_x11;
-	}
-
-	x11->xcb = XGetXCBConnection(x11->xlib_conn);
+	x11->xcb = xcb_connect(x11_display, NULL);
 	if (!x11->xcb || xcb_connection_has_error(x11->xcb)) {
 		wlr_log(WLR_ERROR, "Failed to open xcb connection");
-		goto error_display;
+		goto error_x11;
 	}
-
-	XSetEventQueueOwner(x11->xlib_conn, XCBOwnsEventQueue);
 
 	struct {
 		const char *name;
@@ -604,7 +617,7 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 		return false;
 	}
 
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	if (xcb_errors_context_new(x11->xcb, &x11->errors_context) != 0) {
 		wlr_log(WLR_ERROR, "Failed to create error context");
 		return false;
@@ -629,26 +642,28 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 	xcb_rectangle_t rect = { .x = 0, .y = 0, .width = 1, .height = 1 };
 	xcb_poly_fill_rectangle(x11->xcb, blank, gc, 1, &rect);
 
-	x11->cursor = xcb_generate_id(x11->xcb);
-	xcb_create_cursor(x11->xcb, x11->cursor, blank, blank,
+	x11->transparent_cursor = xcb_generate_id(x11->xcb);
+	xcb_create_cursor(x11->xcb, x11->transparent_cursor, blank, blank,
 		0, 0, 0, 0, 0, 0, 0, 0);
 
 	xcb_free_gc(x11->xcb, gc);
 	xcb_free_pixmap(x11->xcb, blank);
+
+	x11_get_argb32(x11);
 
 	return &x11->backend;
 
 error_event:
 	wl_event_source_remove(x11->event_source);
 error_display:
-	XCloseDisplay(x11->xlib_conn);
+	xcb_disconnect(x11->xcb);
 error_x11:
 	free(x11);
 	return NULL;
 }
 
 static void handle_x11_error(struct wlr_x11_backend *x11, xcb_value_error_t *ev) {
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	const char *major_name = xcb_errors_get_name_for_major_code(
 		x11->errors_context, ev->major_opcode);
 	if (!major_name) {
@@ -686,7 +701,7 @@ log_raw:
 
 static void handle_x11_unknown_event(struct wlr_x11_backend *x11,
 		xcb_generic_event_t *ev) {
-#if WLR_HAS_XCB_ERRORS
+#if HAS_XCB_ERRORS
 	const char *extension;
 	const char *event_name = xcb_errors_get_name_for_xcb_event(
 		x11->errors_context, ev, &extension);

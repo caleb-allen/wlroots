@@ -6,7 +6,6 @@
 #include <wlr/backend/interface.h>
 #include <wlr/backend/session.h>
 #include <wlr/util/log.h>
-#include "backend/backend.h"
 #include "backend/multi.h"
 #include "util/signal.h"
 
@@ -103,14 +102,14 @@ static int multi_backend_get_drm_fd(struct wlr_backend *backend) {
 	struct subbackend_state *sub;
 	wl_list_for_each(sub, &multi->backends, link) {
 		if (sub->backend->impl->get_drm_fd) {
-			return backend_get_drm_fd(sub->backend);
+			return wlr_backend_get_drm_fd(sub->backend);
 		}
 	}
 
 	return -1;
 }
 
-struct wlr_backend_impl backend_impl = {
+static const struct wlr_backend_impl backend_impl = {
 	.start = multi_backend_start,
 	.destroy = multi_backend_destroy,
 	.get_renderer = multi_backend_get_renderer,

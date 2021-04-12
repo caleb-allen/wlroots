@@ -9,8 +9,8 @@
 #include <wlr/types/wlr_matrix.h>
 #include <wlr/util/log.h>
 #include "util/signal.h"
+#include "render/pixel_format.h"
 #include "render/wlr_renderer.h"
-#include "backend/backend.h"
 
 void wlr_renderer_init(struct wlr_renderer *renderer,
 		const struct wlr_renderer_impl *impl) {
@@ -19,7 +19,6 @@ void wlr_renderer_init(struct wlr_renderer *renderer,
 	assert(impl->scissor);
 	assert(impl->render_subtexture_with_matrix);
 	assert(impl->render_quad_with_matrix);
-	assert(impl->render_ellipse_with_matrix);
 	assert(impl->get_shm_texture_formats);
 	assert(impl->texture_from_pixels);
 	renderer->impl = impl;
@@ -132,27 +131,8 @@ void wlr_render_quad_with_matrix(struct wlr_renderer *r,
 	r->impl->render_quad_with_matrix(r, color, matrix);
 }
 
-void wlr_render_ellipse(struct wlr_renderer *r, const struct wlr_box *box,
-		const float color[static 4], const float projection[static 9]) {
-	if (box->width == 0 || box->height == 0) {
-		return;
-	}
-	assert(box->width > 0 && box->height > 0);
-	float matrix[9];
-	wlr_matrix_project_box(matrix, box, WL_OUTPUT_TRANSFORM_NORMAL, 0,
-		projection);
-
-	wlr_render_ellipse_with_matrix(r, color, matrix);
-}
-
-void wlr_render_ellipse_with_matrix(struct wlr_renderer *r,
-		const float color[static 4], const float matrix[static 9]) {
-	assert(r->rendering);
-	r->impl->render_ellipse_with_matrix(r, color, matrix);
-}
-
-const enum wl_shm_format *wlr_renderer_get_shm_texture_formats(
-		struct wlr_renderer *r, size_t *len) {
+const uint32_t *wlr_renderer_get_shm_texture_formats(struct wlr_renderer *r,
+		size_t *len) {
 	return r->impl->get_shm_texture_formats(r, len);
 }
 
@@ -188,7 +168,7 @@ const struct wlr_drm_format_set *wlr_renderer_get_dmabuf_render_formats(
 	return r->impl->get_dmabuf_render_formats(r);
 }
 
-bool wlr_renderer_read_pixels(struct wlr_renderer *r, enum wl_shm_format fmt,
+bool wlr_renderer_read_pixels(struct wlr_renderer *r, uint32_t fmt,
 		uint32_t *flags, uint32_t stride, uint32_t width, uint32_t height,
 		uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y,
 		void *data) {
@@ -199,16 +179,6 @@ bool wlr_renderer_read_pixels(struct wlr_renderer *r, enum wl_shm_format fmt,
 		src_x, src_y, dst_x, dst_y, data);
 }
 
-bool wlr_renderer_blit_dmabuf(struct wlr_renderer *r,
-		struct wlr_dmabuf_attributes *dst,
-		struct wlr_dmabuf_attributes *src) {
-	assert(!r->rendering);
-	if (!r->impl->blit_dmabuf) {
-		return false;
-	}
-	return r->impl->blit_dmabuf(r, dst, src);
-}
-
 bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
 		struct wl_display *wl_display) {
 	if (wl_display_init_shm(wl_display)) {
@@ -217,8 +187,7 @@ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
 	}
 
 	size_t len;
-	const enum wl_shm_format *formats =
-		wlr_renderer_get_shm_texture_formats(r, &len);
+	const uint32_t *formats = wlr_renderer_get_shm_texture_formats(r, &len);
 	if (formats == NULL) {
 		wlr_log(WLR_ERROR, "Failed to initialize shm: cannot get formats");
 		return false;
@@ -228,7 +197,8 @@ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
 	for (size_t i = 0; i < len; ++i) {
 		// ARGB8888 and XRGB8888 must be supported and are implicitly
 		// advertised by wl_display_init_shm
-		switch (formats[i]) {
+		enum wl_shm_format fmt = convert_drm_format_to_wl_shm(formats[i]);
+		switch (fmt) {
 		case WL_SHM_FORMAT_ARGB8888:
 			argb8888 = true;
 			break;
@@ -236,7 +206,7 @@ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
 			xrgb8888 = true;
 			break;
 		default:
-			wl_display_add_shm_format(wl_display, formats[i]);
+			wl_display_add_shm_format(wl_display, fmt);
 		}
 	}
 	assert(argb8888 && xrgb8888);
@@ -276,7 +246,7 @@ struct wlr_renderer *wlr_renderer_autocreate_with_drm_fd(int drm_fd) {
 }
 
 struct wlr_renderer *wlr_renderer_autocreate(struct wlr_backend *backend) {
-	int drm_fd = backend_get_drm_fd(backend);
+	int drm_fd = wlr_backend_get_drm_fd(backend);
 	if (drm_fd < 0) {
 		wlr_log(WLR_ERROR, "Failed to get DRM FD from backend");
 		return NULL;

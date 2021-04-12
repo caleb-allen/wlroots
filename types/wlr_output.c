@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
+#include <drm_fourcc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tgmath.h>
@@ -140,8 +141,17 @@ void wlr_output_update_enabled(struct wlr_output *output, bool enabled) {
 }
 
 static void output_update_matrix(struct wlr_output *output) {
-	wlr_matrix_projection(output->transform_matrix, output->width,
-		output->height, output->transform);
+	wlr_matrix_identity(output->transform_matrix);
+	if (output->transform != WL_OUTPUT_TRANSFORM_NORMAL) {
+		int tr_width, tr_height;
+		wlr_output_transformed_resolution(output, &tr_width, &tr_height);
+
+		wlr_matrix_translate(output->transform_matrix,
+			output->width / 2.0, output->height / 2.0);
+		wlr_matrix_transform(output->transform_matrix, output->transform);
+		wlr_matrix_translate(output->transform_matrix,
+			- tr_width / 2.0, - tr_height / 2.0);
+	}
 }
 
 void wlr_output_enable(struct wlr_output *output, bool enable) {
@@ -450,19 +460,18 @@ bool wlr_output_attach_render(struct wlr_output *output, int *buffer_age) {
 	return true;
 }
 
-bool wlr_output_preferred_read_format(struct wlr_output *output,
-		enum wl_shm_format *fmt) {
+uint32_t wlr_output_preferred_read_format(struct wlr_output *output) {
 	struct wlr_renderer *renderer = wlr_backend_get_renderer(output->backend);
 	if (!renderer->impl->preferred_read_format || !renderer->impl->read_pixels) {
-		return false;
+		return DRM_FORMAT_INVALID;
 	}
 
 	if (!output->impl->attach_render(output, NULL)) {
-		return false;
+		return DRM_FORMAT_INVALID;
 	}
-	*fmt = renderer->impl->preferred_read_format(renderer);
+	uint32_t fmt = renderer->impl->preferred_read_format(renderer);
 	output->impl->rollback_render(output);
-	return true;
+	return fmt;
 }
 
 void wlr_output_set_damage(struct wlr_output *output,
@@ -1044,7 +1053,7 @@ bool wlr_output_cursor_set_image(struct wlr_output_cursor *cursor,
 	cursor->enabled = false;
 	if (pixels != NULL) {
 		cursor->texture = wlr_texture_from_pixels(renderer,
-			WL_SHM_FORMAT_ARGB8888, stride, width, height, pixels);
+			DRM_FORMAT_ARGB8888, stride, width, height, pixels);
 		if (cursor->texture == NULL) {
 			return false;
 		}

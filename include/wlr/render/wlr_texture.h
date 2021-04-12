@@ -10,7 +10,7 @@
 #define WLR_RENDER_WLR_TEXTURE_H
 
 #include <stdint.h>
-#include <wayland-server-protocol.h>
+#include <wayland-server-core.h>
 #include <wlr/render/dmabuf.h>
 
 struct wlr_renderer;
@@ -29,7 +29,7 @@ struct wlr_texture {
  * between attaching a renderer to an output and committing it.
  */
 struct wlr_texture *wlr_texture_from_pixels(struct wlr_renderer *renderer,
-	enum wl_shm_format wl_fmt, uint32_t stride, uint32_t width, uint32_t height,
+	uint32_t fmt, uint32_t stride, uint32_t width, uint32_t height,
 	const void *data);
 
 /**
@@ -75,9 +75,6 @@ bool wlr_texture_write_pixels(struct wlr_texture *texture,
 	uint32_t stride, uint32_t width, uint32_t height,
 	uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y,
 	const void *data);
-
-bool wlr_texture_to_dmabuf(struct wlr_texture *texture,
-	struct wlr_dmabuf_attributes *attribs);
 
 /**
  * Destroys this wlr_texture.
